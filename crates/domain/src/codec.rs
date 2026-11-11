@@ -168,7 +168,9 @@ fn words_to_wire_bytes(words: &[u16]) -> Vec<u8> {
 
 fn wire_bytes_to_words(bytes: &[u8]) -> Vec<u16> {
     bytes
-        .as_chunks::<2>().0.iter()
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| ((c[0] as u16) << 8) | c[1] as u16)
         .collect()
 }
@@ -247,7 +249,9 @@ fn num_to_bcd(v: u64, digits: usize) -> Result<Vec<u8>, CodecError> {
     let padded = format!("{:0>width$}", s, width = digits);
     Ok(padded
         .as_bytes()
-        .as_chunks::<2>().0.iter()
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| ((c[0] - b'0') << 4) | (c[1] - b'0'))
         .collect())
 }

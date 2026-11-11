@@ -166,7 +166,9 @@ pub fn parse_response(req: &[u8], resp: &[u8]) -> Result<RespBody, FrameError> {
                     )));
                 }
                 Ok(RespBody::Words(
-                    data.as_chunks::<2>().0.iter()
+                    data.as_chunks::<2>()
+                        .0
+                        .iter()
                         .map(|c| ((c[0] as u16) << 8) | c[1] as u16)
                         .collect(),
                 ))
