@@ -7,16 +7,19 @@
 ```
 src-tauri/        Tauri 2 薄壳：窗口 + gateway_info（读 %APPDATA%/gatewayd/gateway.token）
                  + tauri-plugin-dialog（设备包 zip/目录选择）
+                 + updates.rs（应用更新：检查/下载/安装/打开发布页）
+                 + tauri.release.conf.json（仅 CI 构建叠加：把 gatewayd.exe 打进安装包）
 ui/               Vue 3 + TS + Vite + Pinia + Naive UI（仅表单）
   src/api/ws.ts     协议客户端单例：握手/重连/请求配对/订阅 refcount/日志
   src/api/bridge.ts 服务端消息 → Pinia 的唯一分发点
-  src/stores/       connection / project / tags / dashboards / workspaces / plugins / toast
+  src/stores/       connection / project / tags / dashboards / workspaces / plugins /
+                   updates / toast
   src/pages/        首页 / 诊断 / 全局仪表盘 / 通道 / 设备 / 设备包 / 插件 /
-                   插件页面 / 全局点表 / 设备工作区（/t/:typeId/:pageId?）
+                   插件页面 / 全局点表 / 设备工作区（/t/:typeId/:pageId?）/ 设置
   src/components/device/  设备工作区组件：概览 / 参数设置
   src/utils/devicePages.ts 宿主组件目录、包默认/内置 fallback 页面
   src/plugins/      ESM 插件宿主：动态 import、PluginContext、权限、tag 聚合
-  src/styles/       theme.css（设计系统）+ pages.css（设备包/仪表盘/插件/首页/工作区）
+  src/styles/       theme.css（设计系统）+ pages.css（设备包/仪表盘/插件/首页/工作区/设置）
 ui-plugin-sdk/    插件作者类型定义（SDK v1，index.d.ts；无构建步骤）
 ```
 
@@ -73,4 +76,19 @@ UI 插件入口由 gatewayd 的 HTTP 静态服务提供（`/plugins/<id>/<entry>
 - **Volar 坑**：模板静态属性里不要放字面量 `ws://…`（会破坏后续表达式类型解包）。
 - **v-model 坑**：`v-model:value` 与 `@update:value` 同时写会互相覆盖（Vue 合并同一监听时的行为）；
   需要“选择后联动”时用 `:value` + `@update:value` 自己赋值（见 DashboardPage 的点位选择）。
+- **设置页**（/settings）：连接（WS 地址/token 编辑，保存走 `gateway.start` 并重连）与
+  应用更新两块。更新状态机在 `stores/updates.ts`（idle/checking/downloading/ready/installing），
+  命令契约在 `src-tauri/src/updates.rs`（snake_case 字段）：`get_app_version` /
+  `check_for_updates`（读 `releases/latest/download/latest.json` 静态清单，不走限流的
+  api.github.com；semver 比较，预发布跳过）/ `download_update{onProgress: Channel}`
+  （流式 + sha256 校验）/ `install_update`（复验 → 分离拉起安装程序 → 退出）/
+  `open_update_release`。清单与下载 URL 的信任校验在 `trusted_download`（仅本仓库
+  Release 直链，拒绝端口/查询串/用户信息）。浏览器调试模式更新区不可用
+  （`isTauriRuntime()` 判断）。清单格式见 `scripts/release-artifacts.cjs`：
+  `{version, notes, published_at, installers: {"windows-x64": {name, url, size, sha256}}}`。
+- **发版构建**：`tauri.release.conf.json` 是**只给 CI 用的叠加配置**
+  （`pnpm tauri build -- --bundles nsis --config src-tauri/tauri.release.conf.json`），
+  把 `target/release/gatewayd.exe` 作为资源打进安装目录；本地 `pnpm tauri dev` 不引用它
+  —— resources 缺失会让 dev 报错，所以绝不能并进主 tauri.conf.json。
+  完整发版流程见仓库根 README「发版与更新」。
 - `pnpm --dir ui build`（含 vue-tsc）必须通过再提交。

@@ -1,7 +1,7 @@
 # 路线图与交接文档（Roadmap / Handoff）
 
 > 本文件用于跨会话交接：新会话从这里恢复上下文即可继续开发。
-> 最后更新：2026-11-11（第五轮完成时）。
+> 最后更新：2026-11-11（发版机制完成时）。
 
 ## 0. 一句话背景
 
@@ -9,12 +9,12 @@
 （串口/轮询/实时库/设备包/工作区/UI 插件/WS 服务），桌面 UI 是它的一个 WebSocket 客户端。
 设备能力通过**声明式设备包**扩展（导入即增加设备），UI 能力通过 **ESM UI 插件**扩展。
 
-## 1. 当前状态（第一～五轮已完成）
+## 1. 当前状态（第一～五轮 + 发版机制已完成）
 
 - Rust 1.99.1（MSVC）已装；Node 24 + pnpm 11 + WebView2 + Tauri CLI 2.12.4 就绪。
 - Workspace：`crates/domain`、`crates/driver-modbus-rtu`、`crates/packaging`、
   `crates/gateway`、`crates/wire`、`apps/gatewayd`、`apps/desktop/src-tauri`。
-- 后端 **103 个测试全绿**；clippy 0 警告；fmt 通过；`vue-tsc` + `vite build` 通过。
+- 后端 **110 个测试全绿**；clippy 0 警告；fmt 通过；`vue-tsc` + `vite build` 通过。
 - 实机验收通过：`pkg validate` / `poll --com SIM` / `serve --sim` + `/health` +
   独立 WebSocket 客户端全协议；桌面 UI（浏览器模式）走完 诊断→通道→设备→实时点表→写值→
   扫描→添加/删除设备→断线重连全流程。
@@ -373,6 +373,33 @@ pnpm --dir ui dev                                 # 浏览器调试：?token=<ga
 - 插件导航页仍属于系统工作区，设备类型专属插件页/`devicePanels` 留后续；
 - 包升级不自动合并已保存的工作区页面，需要「恢复包默认页面」。
 
+## 5.5 发版机制（已完成，提前兑现第七轮的 CI/更新部分）
+
+参照 mkktop/pika_client 的机制落地，仅 Windows x64：
+
+- **脚本**（repo 根 `scripts/`）：`set-version.mjs`（4 处版本一次同步 + 刷 Cargo.lock）、
+  `check-release-version.mjs`（tag 与版本一致性）、`stage-installer.py`（安装包 + sha256/
+  来源树 build-info.json staging）、`release-artifacts.cjs`（找源码树一致的成功 CI 构建、
+  复验摘要、上传 draft Release）。
+- **工作流**：`check.yml`（push master/PR：fmt+clippy+测试 → gatewayd.exe → NSIS 安装包 →
+  staging 工件）；`release.yml`（推 `v*` tag → 提升验证过的工件为 draft Release）。
+- **gatewayd 分发**：`tauri.release.conf.json` 叠加配置把 `target/release/gatewayd.exe`
+  打进安装目录（仅 CI 构建引用；并进主配置会让 `tauri dev` 因资源缺失报错）。
+  本轮不自动拉起，装完手动 `gatewayd serve`；sidecar 自动管理仍在第七轮。
+- **应用内更新**（自研，不用 tauri-plugin-updater）：`src-tauri/src/updates.rs` 五命令
+  （get_app_version / check_for_updates / download_update{Channel 进度} / install_update /
+  open_update_release）。检查读 Release 附带的 `latest.json` 静态清单（由
+  release-artifacts.cjs 在发版时生成上传：版本/说明/各平台安装包规范名+百分号编码 URL+
+  sha256），不走 api.github.com（限流 60 次/小时）；信任边界：semver + `_x64-setup.exe`
+  后缀 + 摘要 hex + `https://github.com/mkktop/plan_M/releases/download/` 直链
+  （拒绝端口/查询串/用户信息/锚点）；预发布版本跳过；下载流式哈希、安装前复验、
+  detached 拉起后退出。7 个单测（版本比较/预发布跳过/清单资产选择/URL 信任/摘要/
+  本地 TCP 流式下载）。
+- **UI**：新设置页 `/settings`（连接编辑从诊断页迁入 + 应用与更新：检查/下载进度/安装重启/
+  打开发布页）；`stores/updates.ts` 状态机；诊断页保留状态/健康探测/日志。
+- 版本真值 = 根 Cargo.toml workspace version；发版流程 `set-version` → 提交 → tag →
+  release.yml → 确认 publish，详见 README「发版与更新」。
+
 ## 6. 第六轮：报警 + 历史（下一轮）
 
 - **报警**：点级限值（设备包 `alarms` 默认 + 实例覆盖），状态机 active/ack/cleared；
@@ -387,8 +414,9 @@ pnpm --dir ui dev                                 # 浏览器调试：?token=<ga
 - **rhai 驱动**：设备包可带 `driver.rhai`（`protocol.driver = "script"`），钩子
   `encode_read/encode_write/decode`；宿主白名单 API（crc16/hex/位运算），预编译校验；
   `Driver` 端口复用现有调度。
-- **打包**：Tauri `externalBin` sidecar 打 `gatewayd.exe`；安装包/托盘常驻/开机自启
-  （可选 Windows 服务模式）；headless 网关部署文档。
+- **打包**：~~安装包~~（CI 构建/发布/应用内更新已在 5.5 交付）；剩余：
+  gatewayd 自动拉起/退出管理（sidecar 或 Windows 服务模式）、托盘常驻、开机自启、
+  headless 网关部署文档。
 - **验收**：用 rhai 包跑通一台非标协议设备的 poll；安装包在干净机器上开箱可用。
 
 ## 8. 新会话开场建议

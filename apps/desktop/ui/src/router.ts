@@ -55,6 +55,11 @@ export const router = createRouter({
       component: () => import('@/pages/TagsPage.vue'),
       meta: { title: '实时点表' },
     },
+    {
+      path: '/settings',
+      component: () => import('@/pages/SettingsPage.vue'),
+      meta: { title: '设置' },
+    },
     { path: '/:pathMatch(.*)*', redirect: '/home' },
   ],
 })

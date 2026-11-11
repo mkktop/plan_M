@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { NButton, NInput } from 'naive-ui'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import { NButton } from 'naive-ui'
 import PageHeader from '@/components/PageHeader.vue'
 import AppIcon from '@/components/AppIcon.vue'
 import { gateway } from '@/api/ws'
@@ -10,6 +11,7 @@ import { useTagsStore } from '@/stores/tags'
 import { useToastStore } from '@/stores/toast'
 import { formatClock } from '@/utils/format'
 
+const router = useRouter()
 const conn = useConnectionStore()
 const project = useProjectStore()
 const tags = useTagsStore()
@@ -18,11 +20,6 @@ const toast = useToastStore()
 // 模板里统一走这层别名（Volar 对 class 实例上的 reactive 字段做 ref 解包时类型会跑偏）。
 const gs = gateway.state
 const uptimeText = computed(() => conn.uptimeText)
-
-const editing = ref(false)
-const applying = ref(false)
-const showToken = ref(false)
-const form = reactive({ wsUrl: gs.settings.wsUrl, token: gs.settings.token })
 
 const health = ref<{
   state: 'idle' | 'checking' | 'ok' | 'fail'
@@ -86,28 +83,6 @@ async function checkHealth(): Promise<void> {
   }
 }
 
-function openSettings(): void {
-  form.wsUrl = gs.settings.wsUrl
-  form.token = gs.settings.token
-  editing.value = true
-}
-
-async function applySettings(): Promise<void> {
-  const wsUrl = form.wsUrl.trim()
-  if (!wsUrl) {
-    toast.error('请填写 gatewayd 的 WebSocket 地址')
-    return
-  }
-  applying.value = true
-  try {
-    await gateway.start({ wsUrl, token: form.token.trim() })
-    editing.value = false
-    toast.success('已应用连接设置')
-  } finally {
-    applying.value = false
-  }
-}
-
 async function reconnect(): Promise<void> {
   await conn.reconnect()
   toast.info('正在重新连接 gatewayd')
@@ -133,8 +108,8 @@ watch(
 <template>
   <div class="page">
     <PageHeader title="诊断" subtitle="连接 gatewayd 采集进程，检查链路与实时数据健康度">
-      <n-button size="small" @click="openSettings">
-        <template #icon><AppIcon name="link" :size="15" /></template>
+      <n-button size="small" @click="router.push('/settings')">
+        <template #icon><AppIcon name="settings" :size="15" /></template>
         连接设置
       </n-button>
       <n-button size="small" type="primary" @click="reconnect">
@@ -155,35 +130,6 @@ watch(
             <template #icon><AppIcon name="power" :size="15" /></template>
             断开
           </n-button>
-        </div>
-
-        <div v-if="editing" class="settings-panel">
-          <div class="field">
-            <label>WebSocket 地址</label>
-            <n-input v-model:value="form.wsUrl" placeholder="gatewayd 的 WebSocket 地址" />
-          </div>
-          <div class="field">
-            <label>访问 token</label>
-            <n-input
-              v-model:value="form.token"
-              :type="showToken ? 'text' : 'password'"
-              placeholder="gatewayd 数据目录下的 gateway.token"
-            >
-              <template #suffix>
-                <button type="button" class="input-icon" title="显示/隐藏" @click="showToken = !showToken">
-                  <AppIcon name="eye" :size="15" />
-                </button>
-              </template>
-            </n-input>
-            <p class="hint">
-              桌面壳会自动读取 <code>%APPDATA%/gatewayd/gateway.token</code>；浏览器调试可带
-              <code>?token=…</code> 打开。
-            </p>
-          </div>
-          <div class="form-actions">
-            <n-button size="small" @click="editing = false">取消</n-button>
-            <n-button size="small" type="primary" :loading="applying" @click="applySettings">保存并连接</n-button>
-          </div>
         </div>
 
         <dl class="kv-list">

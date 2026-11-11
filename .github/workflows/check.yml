@@ -1,0 +1,53 @@
+name: Desktop build
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: windows-x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: apps/desktop
+      - name: Rust checks
+        run: |
+          cargo fmt --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace --locked
+      - name: Build gatewayd (bundled into installer)
+        run: cargo build --release --locked -p hmi-gatewayd
+      - name: Build installer
+        run: pnpm tauri build --bundles nsis --config src-tauri/tauri.release.conf.json
+        working-directory: apps/desktop
+      - name: Stage installer and source manifest
+        env:
+          INSTALLER_PLATFORM: windows-x64
+          INSTALLER_GLOB: target/release/bundle/nsis/*.exe
+        run: python scripts/stage-installer.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-installer
+          path: artifacts/installers/windows-x64/
+          if-no-files-found: error

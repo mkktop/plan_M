@@ -50,9 +50,11 @@ crates/
 apps/
 ├─ gatewayd/          CLI：serve / poll / scan / pkg；HTTP 静态服务 /plugins/<id>/<entry>
 └─ desktop/
-   ├─ src-tauri/      Tauri 2 薄壳（gateway_info 读取 token、dialog 插件；不写业务逻辑）
-   ├─ ui/             Vue 3 + TS + Vite + Pinia（WS 客户端 / 七个业务页 / 插件宿主）
+   ├─ src-tauri/      Tauri 2 薄壳（gateway_info / 应用更新命令；不写业务逻辑）
+   ├─ ui/             Vue 3 + TS + Vite + Pinia（WS 客户端 / 业务页 / 设置页 / 插件宿主）
    └─ ui-plugin-sdk/  插件作者用的 TypeScript 类型（SDK v1，无构建步骤）
+scripts/              发版辅助：版本同步 / 一致性校验 / 安装包 staging / Release 校验上传
+.github/workflows/    check.yml（构建）+ release.yml（tag → draft Release）
 examples/packages/
 └─ pm3000/            示例设备包（三相电表，覆盖 u16/u32/i32/cdab/BCD/位展开/可写点/双轮询组）
 examples/ui-plugins/
@@ -63,7 +65,7 @@ examples/ui-plugins/
 
 ```bash
 cargo build --workspace
-cargo test --workspace          # 103 个测试：编解码/帧/虚拟总线端到端/包校验/插件安装/工作区/仪表盘/WS 协议
+cargo test --workspace          # 110 个测试：编解码/帧/虚拟总线端到端/包校验/插件安装/工作区/仪表盘/WS 协议/更新校验
 
 # 1) 校验示例设备包
 gatewayd pkg validate examples/packages/pm3000
@@ -129,6 +131,8 @@ Vue 3 + TypeScript + Vite + Pinia；Naive UI 只做表单控件，外壳/表格/
   插件贡献的导航页自动出现在侧栏，插件组件自动进入仪表盘「组件类型」下拉框。
 - **实时点表**：按设备查看点位；只订阅当前设备的 tag（bit 子 tag 一并订阅），值/单位/质量/更新时间，
   状态字位展开为芯片，`access=rw` 的点可写值（工程量，gatewayd 负责反算 scale/offset）。
+- **设置**：连接（WS 地址/token 编辑，从诊断页迁移）+ 应用与更新（当前版本、检查更新、
+  下载进度、安装并重启、打开发布页）；更新命令在 `src-tauri/src/updates.rs`。
 
 基础设施：`ui/src/api/ws.ts` 单例客户端负责 hello/token 握手、指数退避重连、请求响应配对、
 **订阅引用计数去重**、重连后自动重放订阅；Pinia 分为 `connection/project/tags/dashboards/workspaces/plugins/toast`。
@@ -288,6 +292,40 @@ UI 插件（`UiPluginDto`）：`{ id, name, version, sdkVersion, permissions[], 
 `getWorkspaces/saveWorkspace/removeWorkspace` 统一以 `workspaces` 返回完整列表。
 `PackageDto.ui.pages` 提供包默认页面，`workspaces` 保存用户覆盖。
 
+## 发版与更新
+
+版本号单一真值是根 `Cargo.toml` 的 `[workspace.package] version`（所有 crate
+`version.workspace = true`，gatewayd 的 `/health` 与桌面壳版本自动跟随）；另需同步
+`apps/desktop/src-tauri/tauri.conf.json` 与两个 `package.json` —— 用脚本一次改全：
+
+```bash
+node scripts/set-version.mjs 0.2.0   # 同步 4 处版本号并刷新 Cargo.lock
+git commit -am "chore: v0.2.0"
+git tag v0.2.0 && git push origin master v0.2.0
+```
+
+GitHub Actions（与 pika_client 同一套机制）：
+
+- **check.yml**：push master / PR 时在 windows-latest 上跑 fmt + clippy + 全量测试，
+  构建 `gatewayd.exe` 与 NSIS 安装包（`--config src-tauri/tauri.release.conf.json`
+  叠加把 gatewayd.exe 打进安装目录），staging 出带 sha256/来源树哈希的工件。
+- **release.yml**：推 `v*` tag 后校验版本一致性 → 找到与 tag 源码树一致的成功 CI 构建 →
+  复验工件摘要 → 创建 **draft Release** 并附安装包 + `latest.json` 更新清单
+  （版本/说明/各平台安装包的规范资产名、百分号编码 URL、sha256）；手动确认后 publish。
+  只提升「构建过且验证过」的产物，绝不改已发布的 Release。
+
+安装包内容：`HMI Platform_<版本>_x64-setup.exe`（含桌面应用 + 同版本 gatewayd.exe，
+装到同一目录）。装完从安装目录手动运行 `gatewayd serve`（数据目录仍在
+`%APPDATA%/gatewayd`）；自动拉起留给后续轮次。
+
+**应用内更新**（设置 → 应用与更新）：自研命令而非 tauri-plugin-updater —— 读 Release
+附带的静态清单 `releases/latest/download/latest.json`（不走 api.github.com，避开 60 次/小时
+限流；CDN 缓存导致发布后最长延迟约 1 小时可见）→ semver 比较（预发布版本跳过）→ 流式下载
+`_x64-setup.exe` 并校验清单里的 sha256 → 分离进程拉起安装程序并退出。信任边界：只接受
+`https://github.com/mkktop/plan_M/releases/download/` 直链（拒绝端口/查询串/用户信息）+
+平台后缀 + 合法摘要；更新逻辑全在 Rust 侧（`src-tauri/src/updates.rs`），不经 webview 网络。
+浏览器调试模式更新区不可用（连接设置仍可编辑）。
+
 ## 下一轮：报警 + 历史
 
 完整计划、验收标准与交接说明见 **[docs/ROADMAP.md](docs/ROADMAP.md)**。概要：
@@ -299,7 +337,11 @@ UI 插件（`UiPluginDto`）：`{ id, name, version, sdkVersion, permissions[], 
 ## 已知边界（刻意不做）
 
 - 无 TLS（本地回环服务，token 鉴权已够用；跨机部署时再加）
-- Tauri 尚未自动拉起 gatewayd（sidecar 在后续轮次）；开发期先手动 `serve`
+- 安装包未做代码签名：Windows SmartScreen 会提示「更多信息 → 仍要运行」；
+  应用内更新依赖 GitHub 资产 sha256 摘要做完整性校验（不做来源签名验证）
+- 安装版 gatewayd 与手动 `cargo run` 版并存时需要自己避开 59120 端口冲突
+- Tauri 尚未自动拉起 gatewayd（sidecar 在后续轮次）；安装包里已附带 gatewayd.exe，
+  开发期仍手动 `serve`
 - 浏览器调试模式导入设备包需要 gatewayd 本机路径；拖放/文件对话框只在桌面壳内可用
 - 仪表盘布局是「最后写入者胜」，多人同时编辑同一看板不做冲突合并
 - 设备类型 = 设备包；同一类型共享页面配置，但仪表盘按设备实例独立保存

@@ -36,6 +36,7 @@ const baseNav: NavItem[] = [
   { path: '/packages', label: '设备包', desc: '型号与点表', icon: 'package' },
   { path: '/plugins', label: '插件', desc: 'ESM UI 扩展', icon: 'plugin' },
   { path: '/tags', label: '实时点表', desc: '全局数据', icon: 'grid' },
+  { path: '/settings', label: '设置', desc: '连接与更新', icon: 'settings' },
 ]
 
 const activeTypeId = computed(() =>
@@ -197,7 +198,7 @@ onBeforeUnmount(() => {
             title="返回系统页面"
             @click="router.push('/home')"
           >
-            <AppIcon name="settings" :size="17" />
+            <AppIcon name="layout" :size="17" />
             <span class="nav-text">
               <span>系统</span>
               <small>通道 / 设备包 / 插件</small>

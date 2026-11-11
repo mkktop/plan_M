@@ -17,3 +17,9 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde = { workspace = true }
 dirs = { workspace = true }
+semver = { workspace = true }
+reqwest = { workspace = true }
+sha2 = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }

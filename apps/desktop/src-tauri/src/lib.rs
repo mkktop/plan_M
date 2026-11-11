@@ -1,7 +1,9 @@
-//! 桌面壳（thin）：只做 UI 宿主与「连接信息」读取。
+//! 桌面壳（thin）：只做 UI 宿主、连接信息读取与应用更新。
 //!
 //! 采集、协议、配置真值全部在 gatewayd；这里不实现任何业务逻辑。
 //! UI 退出不杀 gatewayd —— 采集必须常驻。
+
+pub mod updates;
 
 use serde::Serialize;
 use std::path::PathBuf;
@@ -55,7 +57,15 @@ pub fn run() {
     tauri::Builder::default()
         // 文件/目录选择：设备包 zip 或解包目录 → 把绝对路径交给 gatewayd 导入。
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![gateway_info])
+        .manage(updates::PendingUpdateState::new())
+        .invoke_handler(tauri::generate_handler![
+            gateway_info,
+            updates::get_app_version,
+            updates::check_for_updates,
+            updates::download_update,
+            updates::install_update,
+            updates::open_update_release
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
