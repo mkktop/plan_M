@@ -10,10 +10,13 @@ src-tauri/        Tauri 2 薄壳：窗口 + gateway_info（读 %APPDATA%/gateway
 ui/               Vue 3 + TS + Vite + Pinia + Naive UI（仅表单）
   src/api/ws.ts     协议客户端单例：握手/重连/请求配对/订阅 refcount/日志
   src/api/bridge.ts 服务端消息 → Pinia 的唯一分发点
-  src/stores/       connection / project / tags / dashboards / plugins / toast
-  src/pages/        诊断 / 仪表盘 / 通道 / 设备 / 设备包 / 插件 / 插件页面 / 实时点表
+  src/stores/       connection / project / tags / dashboards / workspaces / plugins / toast
+  src/pages/        首页 / 诊断 / 全局仪表盘 / 通道 / 设备 / 设备包 / 插件 /
+                   插件页面 / 全局点表 / 设备工作区（/t/:typeId/:pageId?）
+  src/components/device/  设备工作区组件：概览 / 参数设置
+  src/utils/devicePages.ts 宿主组件目录、包默认/内置 fallback 页面
   src/plugins/      ESM 插件宿主：动态 import、PluginContext、权限、tag 聚合
-  src/styles/       theme.css（设计系统）+ pages.css（设备包/仪表盘/插件专用）
+  src/styles/       theme.css（设计系统）+ pages.css（设备包/仪表盘/插件/首页/工作区）
 ui-plugin-sdk/    插件作者类型定义（SDK v1，index.d.ts；无构建步骤）
 ```
 
@@ -49,8 +52,16 @@ UI 插件入口由 gatewayd 的 HTTP 静态服务提供（`/plugins/<id>/<entry>
 - 新增 wire 消息要同时改 `crates/wire`、`apps/gatewayd/src/serve.rs`、
   `ui/src/api/types.ts`，并补 `ws_smoke` 断言。
 - 页面只读 Pinia，不自己解析服务端消息；订阅只覆盖当前可见设备/看板。
+- **设备工作区**：顶部类型标签 = 已安装设备包（一包一类型）；`/t/:typeId/:pageId?` 页面按类型共享，
+  `?device=` 选实例。页面由包 `ui.pages` 声明（`overview/dashboard/tags/settings`），
+  用户覆盖保存到 `<data-dir>/workspaces.json`；`utils/devicePages.ts` 是组件目录与 fallback。
+  左侧栏在设备模式显示类型页面、系统模式显示全局页面，底部固定「系统」入口。
+- 新增宿主组件 kind 必须同步 `crates/packaging/src/validate.rs` 白名单、
+  `crates/gateway/src/workspaces.rs` 校验、`ui/src/utils/devicePages.ts` 与
+  `DeviceWorkspacePage.vue` 渲染分支。
 - 仪表盘布局真值在 gatewayd（`<data-dir>/dashboards.json`）：组件必须带 `layout` 且互不重叠，
-  新增组件字段要向后兼容（serde default / TS 可选）。
+  新增组件字段要向后兼容（serde default / TS 可选）。设备工作区看板带
+  `scopeKind="device"` + `scopeId=<device id>`；全局页只看无 scope 的看板。
 - 仪表盘组件契约 `{ id, kind, title, tag, unit, config, layout }` 与插件 widget 同构，
   内置渲染器在 `DashboardPage.vue`；插件组件 kind 为 `plugin:<插件id>:<组件id>`，
   由 `PluginWidget.vue` 挂载 `plugins/host.ts` 动态加载的 ESM；未知 `kind` 显示占位而不是崩溃。

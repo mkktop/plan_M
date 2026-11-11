@@ -496,6 +496,19 @@ impl Session {
                 Ok(plugins) => Ok(Some(ServerMsg::UiPlugins { plugins })),
                 Err(e) => Ok(Some(ServerMsg::Error { message: e })),
             },
+            ClientMsg::GetWorkspaces => Ok(Some(ServerMsg::Workspaces {
+                workspaces: svc.workspaces().await,
+            })),
+            ClientMsg::SaveWorkspace { workspace } => match svc.save_workspace(workspace).await {
+                Ok(workspaces) => Ok(Some(ServerMsg::Workspaces { workspaces })),
+                Err(e) => Ok(Some(ServerMsg::Error { message: e })),
+            },
+            ClientMsg::RemoveWorkspace { device_type } => {
+                match svc.remove_workspace(&device_type).await {
+                    Ok(workspaces) => Ok(Some(ServerMsg::Workspaces { workspaces })),
+                    Err(e) => Ok(Some(ServerMsg::Error { message: e })),
+                }
+            }
         }
     }
 

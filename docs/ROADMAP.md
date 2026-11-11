@@ -1,20 +1,20 @@
 # 路线图与交接文档（Roadmap / Handoff）
 
 > 本文件用于跨会话交接：新会话从这里恢复上下文即可继续开发。
-> 最后更新：2026-11-11（第四轮完成时）。
+> 最后更新：2026-11-11（第五轮完成时）。
 
 ## 0. 一句话背景
 
 可扩展、高自定义的上位机：**Tauri 2 + Rust 双进程**架构。`gatewayd` 是常驻采集进程
-（串口/轮询/实时库/设备包/UI 插件/WS 服务），桌面 UI 是它的一个 WebSocket 客户端。
+（串口/轮询/实时库/设备包/工作区/UI 插件/WS 服务），桌面 UI 是它的一个 WebSocket 客户端。
 设备能力通过**声明式设备包**扩展（导入即增加设备），UI 能力通过 **ESM UI 插件**扩展。
 
-## 1. 当前状态（第一～四轮已完成）
+## 1. 当前状态（第一～五轮已完成）
 
 - Rust 1.99.1（MSVC）已装；Node 24 + pnpm 11 + WebView2 + Tauri CLI 2.12.4 就绪。
 - Workspace：`crates/domain`、`crates/driver-modbus-rtu`、`crates/packaging`、
   `crates/gateway`、`crates/wire`、`apps/gatewayd`、`apps/desktop/src-tauri`。
-- 后端 **95 个测试全绿**；clippy 0 警告；fmt 通过；`vue-tsc` + `vite build` 通过。
+- 后端 **103 个测试全绿**；clippy 0 警告；fmt 通过；`vue-tsc` + `vite build` 通过。
 - 实机验收通过：`pkg validate` / `poll --com SIM` / `serve --sim` + `/health` +
   独立 WebSocket 客户端全协议；桌面 UI（浏览器模式）走完 诊断→通道→设备→实时点表→写值→
   扫描→添加/删除设备→断线重连全流程。
@@ -41,6 +41,19 @@
     渲染 220.1V/GOOD/量程 180–260 → 布局落 `dashboards.json` → 刷新页面与重启 gatewayd 后仍在 →
     移除插件后组件退化为占位符、导航项消失 → 重新导入恢复；坏插件导入显示逐字段错误；
     Tauri 窗口内（WebView2 + CSP）插件资源成功加载并渲染 220.1V。
+- **第五轮已交付**：设备类型工作区。
+  - 设备包 manifest 新增可选 `ui.pages`（旧包不升 schemaVersion，缺省走宿主 fallback 四页）；
+    宿主组件白名单 `overview / dashboard / tags / settings`；校验 page/component。
+  - wire：`PackageUiDto`、`DevicePageDto`、`WorkspaceDto` + `getWorkspaces/saveWorkspace/removeWorkspace`；
+    `DashboardDto.scopeKind/scopeId`；`DeviceDto.overrides` 回填设置页。
+  - gateway：`workspaces.json` 存储（tmp+rename、损坏容错、保存校验，4 个单测）；package DTO 映射 ui；
+    dashboard scope 校验。
+  - UI：顶部类型标签（一个设备包一个类型，导入即出现）；`/t/:typeId/:pageId?` 工作区；
+    同类型共享页面 + 实例下拉；左侧页面导航 + 底部固定「系统」入口；
+    `DeviceOverviewPanel` / `DeviceSettingsPanel`；dashboard/tags 嵌入模式（按设备隔离）；
+    页面编辑器（页面/组件增删排序、config JSON、恢复包默认）。
+  - 验收实测：类型标签/四页/实例切换/点表隔离/设备改名/按设备看板/自定义页面保存与刷新直链/
+    恢复默认/无 ui 旧包 fallback/无设备类型空状态/系统入口切换全部通过。
 
 ### 常用命令
 
@@ -58,16 +71,18 @@ pnpm tauri dev                                    # Tauri 窗口（token 自动�
 pnpm --dir ui dev                                 # 浏览器调试：?token=<gateway.token>
 ```
 
-- UI 目录：`apps/desktop/ui/src/{api,stores,pages,components,styles,plugins}`；
+- UI 目录：`apps/desktop/ui/src/{api,stores,pages,components,components/device,styles,plugins,utils}`；
   `api/ws.ts` 是协议客户端单例，`api/bridge.ts` 是 WS→Pinia 唯一分发点，
-  `plugins/host.ts` 是 ESM 插件宿主（动态 import + ctx）。
-  页面：`DiagnosticsPage / DashboardPage / ChannelsPage / DevicesPage / PackagesPage / PluginsPage /
-  PluginPage / TagsPage`；`styles/pages.css` 放设备包/仪表盘/插件页专用样式（基础设计系统仍为 `theme.css`）。
+  `plugins/host.ts` 是 ESM 插件宿主，`utils/devicePages.ts` 是设备页面组件目录/fallback。
+  页面：`HomePage / DiagnosticsPage / DashboardPage / ChannelsPage / DevicesPage / PackagesPage /
+  PluginsPage / PluginPage / TagsPage / DeviceWorkspacePage`；
+  设备工作区路由 `/t/:typeId/:pageId?`；根路径 `/` 进入 Hello 首页。
+  `styles/pages.css` 放设备包/仪表盘/插件/首页/工作区专用样式（基础设计系统仍为 `theme.css`）。
 
 - 服务地址：`http://127.0.0.1:59120/health`、`ws://127.0.0.1:59120/ws`、
   插件清单 `http://127.0.0.1:59120/plugins`
 - 数据目录默认 `%APPDATA%/gatewayd`：`config.json`、`gateway.token`、`packages/`、
-  `ui-plugins/`、`dashboards.json`、`logs/`
+  `ui-plugins/`、`workspaces.json`、`dashboards.json`、`logs/`
 - SIM 演示数据在 `apps/gatewayd/src/simnet.rs`（寄存器预置值，改这里可改演示现象）
 
 ### 已确定且不要推翻的设计决策
@@ -90,20 +105,32 @@ pnpm --dir ui dev                                 # 浏览器调试：?token=<ga
 - WS 消息：`crates/wire/src/lib.rs`（serde 判别字段 `type`，camelCase）。
   `ClientMsg`: hello/getSnapshot/subscribe/unsubscribe/writeTag/scanChannel/getSerialPorts/
   getPackages/upsertChannel/removeChannel/addDevice/removeDevice/importPackage/
-  getDashboards/saveDashboard/removeDashboard/getUiPlugins/importUiPlugin/removeUiPlugin
+  getDashboards/saveDashboard/removeDashboard/getUiPlugins/importUiPlugin/removeUiPlugin/
+  getWorkspaces/saveWorkspace/removeWorkspace
   `ServerMsg`: welcome/snapshot/changes/channelState/deviceState/scanProgress/scanDone/
-  serialPorts/packages/dashboards/uiPlugins/commandOk/error
+  serialPorts/packages/dashboards/uiPlugins/workspaces/commandOk/error
 - **Value 的 JSON 形状是外部标签枚举**：`{"f64":220.1}` / `{"i64":300}` / `{"bool":true}` /
   `{"str":"..."}`；`TagChange = {tag, value, quality, tsMs}`；quality 字符串
   `good|bad|uncertain|comm_lost`。
 - 快照 DTO 已含 UI 所需字段：`ChannelDto` 带完整串口参数；`PointDto` 带
   `register/area/type/access/scale/offset/unit/bits[]`。设备上下线是独立的
   `deviceState` 事件（不再复用 `channelState`）。
-- 仪表盘 DTO：`DashboardDto { id, name, cols, widgets[] }`；
+- 仪表盘 DTO：`DashboardDto { id, name, cols, scopeKind?, scopeId?, widgets[] }`；
   `WidgetDto { id, kind, title, tag, unit, config, layout{x,y,w,h} }`。
   `config` 为组件私有 JSON（value=`decimals`、switch=`onLabel/offLabel`、gauge=`min/max`），
-  未来插件 widget 复用同一形状。保存时 gatewayd 校验：id 规则、边界、组件不重叠。
+  插件 widget 复用同一形状。`scopeKind/scopeId` 缺省 = 全局看板，`device` = 设备工作区看板。
+  保存时 gatewayd 校验：id 规则、边界、组件不重叠、scope 成对且合法。
   `dashboards` 消息是 get/save/remove 的统一应答（返回完整列表）。
+- 设备包 UI：`PackageDto.ui.pages[]`，page 为
+  `{ id, title, icon, components[{ kind, title, config }] }`；kind 白名单
+  `overview|dashboard|tags|settings`（`ALLOWED_DEVICE_PAGE_COMPONENTS`）。
+  manifest 里同形状（`ui.pages`）；旧包缺省时 UI fallback 四页。
+- 工作区 DTO：`WorkspaceDto { deviceType, pages[] }`（deviceType = 包 id）；
+  `workspaces` 是 get/save/remove 的统一应答。保存到 `<data-dir>/workspaces.json`，
+  校验页面 id/标题/组件白名单/数量。没有记录时使用包默认页面。
+- 设备工作区路由：`/t/:typeId/:pageId?`，实例选择用 `?device=<id>`；
+  顶部类型标签来自已安装包；左侧设备模式显示页面、系统模式显示全局导航，底部固定「系统」入口。
+- `DeviceDto.overrides` 回填参数设置页；保存设置复用 `addDevice`（同 id upsert）。
 - UI 插件 DTO：`UiPluginDto { id, name, version, description, author, sdkVersion, permissions[],
   entry, widgets[], pages[], devicePanels[] }`；`uiPlugins` 是 get/import/remove 的统一应答。
   manifest 校验：id/version/sdkVersion、entry 相对路径且存在、权限白名单
@@ -129,7 +156,12 @@ pnpm --dir ui dev                                 # 浏览器调试：?token=<ga
 - 无 TLS（本地回环 + token）；`scanChannel` 在 WS 会话内同步执行（几十秒级）；
 - 历史/报警未落库；配置是 JSON（SQLite 后路已留 `ConfigStore` trait）；
 - 仪表盘布局 last-write-wins（多人同时编辑不合并）；损坏的 `dashboards.json` 按空布局启动并告警；
+- 设备类型 = 设备包；同类型共享页面配置，但仪表盘按设备实例独立保存；
+- 用户保存的工作区页面不会随设备包升级自动合并（恢复默认可刷新）；损坏的 `workspaces.json`
+  按无覆盖启动并告警；
+- 历史/报警未落库；配置是 JSON（SQLite 后路已留 `ConfigStore` trait）；
 - UI 插件 v1 与宿主同 webview，权限是能力门面不是强沙箱；`devicePanels` 已解析但不渲染；
+  插件导航页目前属于系统工作区，设备类型专属插件页/面板留到后续；
   插件入口按 `version` 查询串缓存，改文件不升版本时需要刷新页面或重启 gatewayd；
 - 数据目录 `data/`（本地调试产物）已在 `.gitignore`。
 
@@ -303,7 +335,45 @@ pnpm --dir ui dev                                 # 浏览器调试：?token=<ga
 3. 插件入口 URL 只按 `version` 做缓存失效；开发期改了插件代码但不升版本时需刷新页面。
 4. 权限门面在宿主代码里强制执行，但插件与宿主同 webview，v1 不是强沙箱。
 
-## 5. 第五轮：报警 + 历史（下一轮）
+## 5. 第五轮：设备类型工作区（已完成）
+
+### 实施结果（2026-11-11）
+
+- **packaging**：`PackageManifest.ui`（可选 `ui.pages`）、`PackageUiDecl/UiPageDecl/UiComponentDecl`；
+  校验 page id/标题/组件白名单/数量/配置；`manifest.schema.json` 补 ui；pm3000 示例声明四页。
+- **wire**：`PackageUiDto/DevicePageDto/DevicePageComponentDto`；`WorkspaceDto`；
+  `getWorkspaces/saveWorkspace/removeWorkspace` + `workspaces` 应答；
+  `DashboardDto.scopeKind/scopeId`；`DeviceDto.overrides`（设置页回填）。
+- **gateway**：`workspaces.json` 存储（tmp+rename、损坏容错、保存校验，4 个单测）；
+  `GatewayService` 工作区读写；`package_dto` 映射 ui；dashboard scope 成对校验。
+- **UI**：
+  - `DeviceTypeTabs`：顶部类型标签来自已安装设备包，导入即出现；无包时提示导入。
+  - `DeviceWorkspacePage`：`/t/:typeId/:pageId?`，同类型页面共享，实例下拉 `?device=`；
+    无设备类型显示添加引导；无包显示缺失状态；直链/刷新后按 workspace 恢复页面。
+  - `DeviceOverviewPanel`：订阅当前设备 tag，展示在线/质量统计/通道与包信息/需要关注的 tag。
+  - `DeviceSettingsPanel`：名称/通道/从站/overrides 编辑，复用 `addDevice` upsert。
+  - `DevicePagesEditor`：页面增删/改名/图标/排序；页内组件增删/排序/kind/config JSON；
+    保存到 workspaces.json；恢复包默认页面。
+  - `DashboardPage`/`TagsPage` 增加 embedded + scope/device props；看板按设备隔离，点表只显示当前设备。
+  - `App.vue`：设备模式/系统模式左栏切换，底部固定「系统」入口，顶部标题动态。
+- **验收实测**：类型标签/四页/实例切换/点表隔离/设备改名/按设备看板/自定义页面保存与刷新直链/
+  恢复默认/无 ui 旧包 fallback/无设备类型空状态/系统入口切换全部通过。
+
+### 原始计划（留档）
+
+- 顶部标签 = 设备类型；导入设备包即出现；一个包 = 一个类型。
+- 同类型共享页面；页面由包 `ui.pages` 声明，宿主提供组件（overview/dashboard/tags/settings）。
+- 用户可增删/改名/排序页面并组合组件；覆盖保存到 workspaces.json，可恢复包默认。
+- 类型内实例下拉；仪表盘按设备实例独立。
+- 系统页面固定左栏底部入口。
+
+### 与原始计划的差异
+
+- `dashboard` 采用按设备实例保存（而非类型共享布局），与实例下拉语义一致；
+- 插件导航页仍属于系统工作区，设备类型专属插件页/`devicePanels` 留后续；
+- 包升级不自动合并已保存的工作区页面，需要「恢复包默认页面」。
+
+## 6. 第六轮：报警 + 历史（下一轮）
 
 - **报警**：点级限值（设备包 `alarms` 默认 + 实例覆盖），状态机 active/ack/cleared；
   `ServerMsg::alarms` 推送 + 快照；UI 报警条/报警页/确认操作。
@@ -312,7 +382,7 @@ pnpm --dir ui dev                                 # 浏览器调试：?token=<ga
 - **UI**：ECharts 历史曲线页；报警历史列表。
 - **验收**：设限值触发报警（SIM 改值）→ 确认/恢复流转正确；历史查询能画出曲线。
 
-## 6. 第六轮：rhai 脚本驱动 + 打包分发
+## 7. 第七轮：rhai 脚本驱动 + 打包分发
 
 - **rhai 驱动**：设备包可带 `driver.rhai`（`protocol.driver = "script"`），钩子
   `encode_read/encode_write/decode`；宿主白名单 API（crc16/hex/位运算），预编译校验；
@@ -321,20 +391,23 @@ pnpm --dir ui dev                                 # 浏览器调试：?token=<ga
   （可选 Windows 服务模式）；headless 网关部署文档。
 - **验收**：用 rhai 包跑通一台非标协议设备的 poll；安装包在干净机器上开箱可用。
 
-## 7. 新会话开场建议
+## 8. 新会话开场建议
 
 1. 读本文件 + `README.md`，然后 `cargo test --workspace` 确认基线绿。
 2. 需要看 UI 效果时先跑 `cargo run -p hmi-gatewayd -- serve --sim`，用 Node/临时页面验证 WS。
-3. 第五轮从「报警引擎」开始：先在 domain/设备包定义点级限值与状态机，再补 wire 快照/推送与
+3. 第六轮从「报警引擎」开始：先在 domain/设备包定义点级限值与状态机，再补 wire 快照/推送与
    SQLite 历史表；UI 加报警条/报警页/历史曲线。订阅与质量戳语义沿用现有 TagHub。
 4. UI 插件改动先读 `ui/src/plugins/host.ts` 与 `examples/ui-plugins/meter-card`；
    改 `PluginContext`/manifest 契约要同步 `apps/desktop/ui-plugin-sdk/index.d.ts` 与
    `crates/packaging/src/ui_plugin.rs` 的校验。
    UI 改动先跑 `pnpm --dir ui build`（含 vue-tsc），再用浏览器（`?token=`）或 Tauri 窗口验收。
-5. 新增 wire 消息要同时改 `crates/wire`、gatewayd 的 `serve.rs`、`ui/src/api/types.ts`，
+5. 设备工作区改动先读 `ui/src/pages/DeviceWorkspacePage.vue`、`ui/src/utils/devicePages.ts`、
+   `crates/gateway/src/workspaces.rs`；新增宿主组件 kind 必须同步 packaging 白名单、
+   workspaces 校验、前端组件目录三处。
+6. 新增 wire 消息要同时改 `crates/wire`、gatewayd 的 `serve.rs`、`ui/src/api/types.ts`，
    并补 ws_smoke 断言。
-6. 保持 crate 边界：`domain/gateway/packaging` 不引入 tauri 依赖。
-7. 仪表盘布局改动涉及 `dashboards.json` 契约与保存时校验（`crates/gateway/src/dashboards.rs`）；
-   加字段要向后兼容（serde default），非法/重叠布局会被拒绝保存。
-8. 改 Tauri CSP 后必须实测插件加载（`pnpm tauri dev`）：动态 import 跨源需要
+7. 保持 crate 边界：`domain/gateway/packaging` 不引入 tauri 依赖。
+8. 仪表盘布局改动涉及 `dashboards.json` 契约与保存时校验（`crates/gateway/src/dashboards.rs`）；
+   加字段要向后兼容（serde default），非法/重叠布局会被拒绝保存；scope 必须成对出现。
+9. 改 Tauri CSP 后必须实测插件加载（`pnpm tauri dev`）：动态 import 跨源需要
    `script-src http://127.0.0.1:59120`，资源请求需要 CORS。

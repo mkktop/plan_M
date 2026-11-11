@@ -412,6 +412,8 @@ function describeServer(m: ServerMsg): string {
       return `dashboards · ${m.dashboards.length} 个布局`
     case 'uiPlugins':
       return `uiPlugins · ${m.plugins.length} 个插件`
+    case 'workspaces':
+      return `workspaces · ${m.workspaces.length} 个类型覆盖`
     case 'commandOk':
       return `commandOk · ${m.kind}`
     case 'error':
@@ -461,6 +463,12 @@ function describeClient(m: ClientMsg): string {
       return `importUiPlugin · ${m.path}`
     case 'removeUiPlugin':
       return `removeUiPlugin · ${m.id}`
+    case 'getWorkspaces':
+      return 'getWorkspaces'
+    case 'saveWorkspace':
+      return `saveWorkspace · ${m.workspace.deviceType} (${m.workspace.pages.length} 页)`
+    case 'removeWorkspace':
+      return `removeWorkspace · ${m.deviceType}`
     default:
       return 'unknown'
   }

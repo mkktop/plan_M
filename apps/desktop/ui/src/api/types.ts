@@ -41,6 +41,8 @@ export interface DeviceDto {
   package: string
   slave: number
   online: boolean
+  /** 实例级点表覆盖，供设置页回填 */
+  overrides: Record<string, unknown>
 }
 
 export type DataType = 'u16' | 'i16' | 'u32' | 'i32' | 'u64' | 'f32' | 'f64' | 'bcd16' | 'bcd32'
@@ -74,7 +76,34 @@ export interface PackageDto {
   version: string
   driver: string
   description: string
+  /** 设备包声明的默认工作区页面（空 = 宿主 fallback 四页） */
+  ui: PackageUiDto
   points: PointDto[]
+}
+
+export interface PackageUiDto {
+  pages: DevicePageDto[]
+}
+
+/** 设备工作区的一页：由宿主组件按顺序组合。 */
+export interface DevicePageDto {
+  id: string
+  title: string
+  icon: string
+  components: DevicePageComponentDto[]
+}
+
+export interface DevicePageComponentDto {
+  /** overview / dashboard / tags / settings */
+  kind: string
+  title: string
+  config: Record<string, unknown> | null
+}
+
+/** 某设备类型的页面覆盖（workspaces.json）。 */
+export interface WorkspaceDto {
+  deviceType: string
+  pages: DevicePageDto[]
 }
 
 export interface SerialPortDto {
@@ -105,6 +134,9 @@ export interface DashboardDto {
   id: string
   name: string
   cols: number
+  /** 缺省 = 系统全局看板；device = 某台设备的工作区看板 */
+  scopeKind?: string | null
+  scopeId?: string | null
   widgets: WidgetDto[]
 }
 
@@ -195,6 +227,9 @@ export type ClientMsg =
   | { type: 'getUiPlugins' }
   | { type: 'importUiPlugin'; path: string }
   | { type: 'removeUiPlugin'; id: string }
+  | { type: 'getWorkspaces' }
+  | { type: 'saveWorkspace'; workspace: WorkspaceDto }
+  | { type: 'removeWorkspace'; deviceType: string }
 
 export type ServerMsg =
   | { type: 'welcome'; hostVersion: string }
@@ -208,6 +243,7 @@ export type ServerMsg =
   | { type: 'packages'; packages: PackageDto[] }
   | { type: 'dashboards'; dashboards: DashboardDto[] }
   | { type: 'uiPlugins'; plugins: UiPluginDto[] }
+  | { type: 'workspaces'; workspaces: WorkspaceDto[] }
   | { type: 'commandOk'; kind: string }
   | { type: 'error'; message: string }
 

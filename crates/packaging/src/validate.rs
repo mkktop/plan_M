@@ -3,6 +3,15 @@
 use crate::manifest::PackageManifest;
 use hmi_domain::points::PointsTable;
 
+/// 宿主提供的设备页面组件白名单。设备包只能用这些 kind；
+/// 增删组件需同步宿主 `ui/src/utils/devicePages.ts` 与 `workspaces.rs` 校验。
+pub const ALLOWED_DEVICE_PAGE_COMPONENTS: &[&str] = &["overview", "dashboard", "tags", "settings"];
+
+const MAX_UI_PAGES: usize = 50;
+const MAX_PAGE_COMPONENTS: usize = 20;
+const MAX_PAGE_TITLE: usize = 120;
+const MAX_PAGE_ICON: usize = 64;
+
 /// 校验结果：errors 非空 = 拒绝；warnings 提示但不拦截。
 #[derive(Debug, Default, Clone)]
 pub struct ValidationIssues {
@@ -28,6 +37,7 @@ impl ValidationIssues {
 pub fn validate_package(manifest: &PackageManifest, table: &PointsTable) -> ValidationIssues {
     let mut v = ValidationIssues::default();
     validate_manifest(manifest, &mut v);
+    validate_ui(manifest, &mut v);
     validate_points(table, &mut v);
     v
 }
@@ -59,6 +69,61 @@ fn validate_manifest(m: &PackageManifest, v: &mut ValidationIssues) {
             "不支持的 schemaVersion {}（当前宿主支持 1）",
             m.schema_version
         ));
+    }
+}
+
+/// 校验设备包声明的默认工作区页面与宿主组件引用。
+fn validate_ui(m: &PackageManifest, v: &mut ValidationIssues) {
+    if m.ui.pages.len() > MAX_UI_PAGES {
+        v.error(format!("ui.pages 最多 {MAX_UI_PAGES} 页"));
+    }
+    let mut page_ids = std::collections::HashSet::new();
+    for page in &m.ui.pages {
+        let ctx = format!("ui 页面 `{}`", page.id);
+        let page_id_ok = !page.id.is_empty()
+            && page.id.len() <= 64
+            && page
+                .id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        if !page_id_ok {
+            v.error(format!("{ctx}：id 只允许字母/数字/下划线/横线（≤64）"));
+        }
+        if !page_ids.insert(page.id.as_str()) {
+            v.error(format!("{ctx}：id 重复"));
+        }
+        if page.title.trim().is_empty() {
+            v.error(format!("{ctx}：title 不能为空"));
+        } else if page.title.chars().count() > MAX_PAGE_TITLE {
+            v.error(format!("{ctx}：title 过长（≤{MAX_PAGE_TITLE}）"));
+        }
+        if page.icon.chars().count() > MAX_PAGE_ICON {
+            v.error(format!("{ctx}：icon 过长（≤{MAX_PAGE_ICON}）"));
+        }
+        if page.components.is_empty() {
+            v.error(format!("{ctx}：至少需要一个组件"));
+        }
+        if page.components.len() > MAX_PAGE_COMPONENTS {
+            v.error(format!("{ctx}：组件最多 {MAX_PAGE_COMPONENTS} 个"));
+        }
+        for comp in &page.components {
+            if !ALLOWED_DEVICE_PAGE_COMPONENTS.contains(&comp.kind.as_str()) {
+                v.error(format!(
+                    "{ctx}：未知组件 `{}`（可用：{}）",
+                    comp.kind,
+                    ALLOWED_DEVICE_PAGE_COMPONENTS.join(", ")
+                ));
+            }
+            if comp.title.chars().count() > MAX_PAGE_TITLE {
+                v.error(format!("{ctx}：组件 title 过长（≤{MAX_PAGE_TITLE}）"));
+            }
+            if !comp.config.is_null() && !comp.config.is_object() {
+                v.error(format!(
+                    "{ctx}：组件 `{}` 的 config 必须是 JSON 对象",
+                    comp.kind
+                ));
+            }
+        }
     }
 }
 
@@ -261,5 +326,38 @@ mod tests {
         m.id = "PM 3000".into();
         let v = validate_package(&m, &PointsTable::default());
         assert!(v.errors.iter().any(|e| e.contains("manifest.id")));
+    }
+
+    #[test]
+    fn ui_pages_validated() {
+        let mut m = manifest();
+        m.ui = serde_json::from_value(serde_json::json!({
+            "pages": [
+                { "id": "overview", "title": "设备概览",
+                  "components": [{ "kind": "overview" }] },
+                { "id": "overview", "title": "重复页",
+                  "components": [{ "kind": "shell" }] },
+                { "id": "empty", "title": "空页", "components": [] }
+            ]
+        }))
+        .unwrap();
+        let v = validate_package(&m, &PointsTable::default());
+        assert!(v.errors.iter().any(|e| e.contains("id 重复")));
+        assert!(v.errors.iter().any(|e| e.contains("未知组件")));
+        assert!(v.errors.iter().any(|e| e.contains("至少需要一个组件")));
+    }
+
+    #[test]
+    fn ui_pages_optional_and_valid() {
+        let mut m = manifest();
+        m.ui = serde_json::from_value(serde_json::json!({
+            "pages": [
+                { "id": "dashboard", "title": "仪表盘", "icon": "layout",
+                  "components": [{ "kind": "dashboard" }, { "kind": "tags" }] }
+            ]
+        }))
+        .unwrap();
+        let v = validate_package(&m, &PointsTable::default());
+        assert!(v.ok(), "{v:?}");
     }
 }

@@ -3,6 +3,7 @@
 import { gateway } from './ws'
 import { useProjectStore } from '@/stores/project'
 import { usePluginsStore } from '@/stores/plugins'
+import { useWorkspacesStore } from '@/stores/workspaces'
 import { useTagsStore } from '@/stores/tags'
 import { useConnectionStore } from '@/stores/connection'
 import { useToastStore } from '@/stores/toast'
@@ -16,6 +17,7 @@ export function installGatewayBridge(): void {
 
   const project = useProjectStore()
   const plugins = usePluginsStore()
+  const workspaces = useWorkspacesStore()
   const tags = useTagsStore()
   const conn = useConnectionStore()
   const toast = useToastStore()
@@ -30,6 +32,9 @@ export function installGatewayBridge(): void {
         })
         void plugins.refresh().catch((e) => {
           console.warn('拉取 UI 插件失败', e)
+        })
+        void workspaces.load().catch((e) => {
+          console.warn('拉取设备工作区失败', e)
         })
         break
       case 'snapshot':
@@ -51,6 +56,9 @@ export function installGatewayBridge(): void {
       case 'uiPlugins':
         plugins.applyList(msg.plugins)
         void syncPlugins(msg.plugins)
+        break
+      case 'workspaces':
+        workspaces.applyList(msg.workspaces)
         break
       case 'error':
         // 握手阶段（未连接）的错误没有页面请求可 catch，这里兜底提示。

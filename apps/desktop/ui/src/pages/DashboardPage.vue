@@ -29,6 +29,15 @@ const GAP = 12
 const ROW_H = 64
 const MAX_ROWS = 500
 
+const props = withDefaults(
+  defineProps<{
+    embedded?: boolean
+    scopeKind?: string
+    scopeId?: string
+  }>(),
+  { embedded: false, scopeKind: '', scopeId: '' },
+)
+
 const dashStore = useDashboardsStore()
 const project = useProjectStore()
 const tagStore = useTagsStore()
@@ -42,20 +51,30 @@ const draggingId = ref('')
 const saveError = ref('')
 const lastSavedAt = ref(0)
 
+/** 全局页只看无 scope 的看板；设备工作区只看当前设备的看板。 */
+const scopedList = computed(() =>
+  dashStore.list.filter((d) => {
+    const kind = d.scopeKind ?? ''
+    const id = d.scopeId ?? ''
+    if (!props.scopeKind) return !kind && !id
+    return kind === props.scopeKind && id === props.scopeId
+  }),
+)
+
 const current = computed<DashboardDto | null>(() => {
-  if (!dashStore.list.length) return null
-  return dashStore.list.find((d) => d.id === currentId.value) ?? dashStore.list[0]
+  if (!scopedList.value.length) return null
+  return scopedList.value.find((d) => d.id === currentId.value) ?? scopedList.value[0]
 })
 
 const dashboardOptions = computed(() =>
-  dashStore.list.map((d) => ({ label: d.name, value: d.id })),
+  scopedList.value.map((d) => ({ label: d.name, value: d.id })),
 )
 
 watch(
-  () => dashStore.list.map((d) => `${d.id}:${d.name}`).join('|'),
+  () => scopedList.value.map((d) => `${d.id}:${d.name}`).join('|'),
   () => {
-    if (!dashStore.list.some((d) => d.id === currentId.value)) {
-      currentId.value = dashStore.list[0]?.id ?? ''
+    if (!scopedList.value.some((d) => d.id === currentId.value)) {
+      currentId.value = scopedList.value[0]?.id ?? ''
     }
   },
   { immediate: true },
@@ -152,8 +171,10 @@ async function newDashboard(): Promise<void> {
   const id = `dash-${Date.now().toString(36)}`
   const d: DashboardDto = {
     id,
-    name: `仪表盘 ${dashStore.list.length + 1}`,
+    name: `仪表盘 ${scopedList.value.length + 1}`,
     cols: 12,
+    scopeKind: props.scopeKind || null,
+    scopeId: props.scopeKind ? props.scopeId : null,
     widgets: [],
   }
   try {
@@ -236,7 +257,10 @@ function canWrite(tag: string): boolean {
 
 const tagOptions = computed(() => {
   const out: { label: string; value: string; unit: string }[] = []
-  for (const d of project.devices) {
+  const devices = props.scopeKind
+    ? project.devices.filter((d) => d.id === props.scopeId)
+    : project.devices
+  for (const d of devices) {
     const pkg = project.packageById.get(d.package)
     if (!pkg) continue
     const devName = d.name || d.id
@@ -618,9 +642,13 @@ function removeWidget(w: WidgetDto): void {
 
 <template>
   <div class="page">
-    <PageHeader title="仪表盘" subtitle="网格组态：组件绑定实时 tag，布局保存在 gatewayd（UI 重装不丢）">
+    <PageHeader
+      v-if="!embedded"
+      title="仪表盘"
+      subtitle="网格组态：组件绑定实时 tag，布局保存在 gatewayd（UI 重装不丢）"
+    >
       <n-select
-        v-if="dashStore.list.length > 1"
+        v-if="scopedList.length > 1"
         v-model:value="currentId"
         size="small"
         :options="dashboardOptions"

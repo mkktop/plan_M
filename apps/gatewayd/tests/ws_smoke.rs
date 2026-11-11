@@ -4,7 +4,10 @@
 //! WriteTag → CommandOk。
 
 use futures::{SinkExt, StreamExt};
-use hmi_wire::{ClientMsg, DashboardDto, ServerMsg, WidgetDto, WidgetLayout};
+use hmi_wire::{
+    ClientMsg, DashboardDto, DevicePageComponentDto, DevicePageDto, ServerMsg, WidgetDto,
+    WidgetLayout, WorkspaceDto,
+};
 use tokio_tungstenite::tungstenite::Message;
 
 async fn start_server() -> (String, String) {
@@ -89,6 +92,13 @@ async fn ws_full_protocol_smoke() {
     assert_eq!(snap.channels[0].port, "SIM");
     assert_eq!(snap.devices.len(), 2);
     assert!(snap.packages.iter().any(|p| p.id == "com.acme.pm3000"));
+    let pm = snap
+        .packages
+        .iter()
+        .find(|p| p.id == "com.acme.pm3000")
+        .unwrap();
+    assert_eq!(pm.ui.pages.len(), 4, "演示包应声明四页工作区");
+    assert_eq!(pm.ui.pages[0].components[0].kind, "overview");
 
     // 3. 订阅 pm1.uab，等待第一个 Good 值（模拟从站预置 2201 → 220.1V）
     send(
@@ -156,6 +166,8 @@ async fn ws_full_protocol_smoke() {
         id: "main".into(),
         name: "总览".into(),
         cols: 12,
+        scope_kind: None,
+        scope_id: None,
         widgets: vec![WidgetDto {
             id: "w1".into(),
             kind: "value".into(),
@@ -194,7 +206,69 @@ async fn ws_full_protocol_smoke() {
     };
     assert!(left.is_empty(), "删除后应无仪表盘");
 
-    // 7. UI 插件：安装示例插件 → 列表应答 → 删除
+    // 7. 设备类型工作区：保存 → 列表应答 → 删除
+    let workspace = WorkspaceDto {
+        device_type: "com.acme.pm3000".into(),
+        pages: vec![
+            DevicePageDto {
+                id: "overview".into(),
+                title: "设备概览".into(),
+                icon: "pulse".into(),
+                components: vec![DevicePageComponentDto {
+                    kind: "overview".into(),
+                    title: String::new(),
+                    config: serde_json::json!({}),
+                }],
+            },
+            DevicePageDto {
+                id: "my-page".into(),
+                title: "我的页面".into(),
+                icon: "grid".into(),
+                components: vec![
+                    DevicePageComponentDto {
+                        kind: "tags".into(),
+                        title: "点表".into(),
+                        config: serde_json::json!({}),
+                    },
+                    DevicePageComponentDto {
+                        kind: "dashboard".into(),
+                        title: String::new(),
+                        config: serde_json::json!({}),
+                    },
+                ],
+            },
+        ],
+    };
+    send(
+        &mut ws,
+        &ClientMsg::SaveWorkspace {
+            workspace: workspace.clone(),
+        },
+    )
+    .await;
+    let saved = loop {
+        if let ServerMsg::Workspaces { workspaces } = recv(&mut ws).await {
+            break workspaces;
+        }
+    };
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0], workspace);
+
+    send(
+        &mut ws,
+        &ClientMsg::RemoveWorkspace {
+            device_type: "com.acme.pm3000".into(),
+        },
+    )
+    .await;
+    let left = loop {
+        if let ServerMsg::Workspaces { workspaces } = recv(&mut ws).await {
+            break workspaces;
+        }
+    };
+    assert!(left.is_empty(), "删除覆盖后应无工作区记录");
+
+    // 8. UI 插件：安装示例插件 → 列表应答 → 删除
     let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../examples/ui-plugins/meter-card")
         .canonicalize()

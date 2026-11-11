@@ -23,6 +23,40 @@ pub struct PackageManifest {
     #[serde(default)]
     pub min_host_version: Option<semver::Version>,
     pub protocol: ProtocolDecl,
+    /// 设备类型工作区默认页面（可选；旧包缺省时宿主使用内置四页）。
+    #[serde(default)]
+    pub ui: PackageUiDecl,
+}
+
+/// 设备包声明的 UI（当前只有页面贡献点）。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageUiDecl {
+    #[serde(default)]
+    pub pages: Vec<UiPageDecl>,
+}
+
+/// 一个设备页面：宿主按 `components` 顺序渲染。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiPageDecl {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub icon: String,
+    #[serde(default)]
+    pub components: Vec<UiComponentDecl>,
+}
+
+/// 页面里的一个宿主组件。`config` 由组件自行解释，宿主原样保存。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiComponentDecl {
+    pub kind: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub config: serde_json::Value,
 }
 
 /// 协议声明。
@@ -70,5 +104,27 @@ mod tests {
         let m: PackageManifest = serde_json::from_str(j).unwrap();
         assert_eq!(m.min_host_version, None);
         assert_eq!(m.protocol.defaults, ProtocolDefaults::default());
+        assert!(m.ui.pages.is_empty());
+    }
+
+    #[test]
+    fn parses_ui_pages() {
+        let j = r#"
+        {
+          "schemaVersion": 1, "id": "com.acme.radar", "name": "雷达物位计",
+          "version": "1.0.0", "protocol": { "driver": "modbus-rtu" },
+          "ui": {
+            "pages": [
+              { "id": "overview", "title": "设备概览", "icon": "pulse",
+                "components": [{ "kind": "overview", "title": "运行状态" }] },
+              { "id": "dashboard", "title": "仪表盘", "icon": "layout",
+                "components": [{ "kind": "dashboard" }, { "kind": "tags" }] }
+            ]
+          }
+        }"#;
+        let m: PackageManifest = serde_json::from_str(j).unwrap();
+        assert_eq!(m.ui.pages.len(), 2);
+        assert_eq!(m.ui.pages[0].components[0].kind, "overview");
+        assert_eq!(m.ui.pages[1].components.len(), 2);
     }
 }

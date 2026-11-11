@@ -129,6 +129,23 @@ pub fn validate_dashboard(d: &DashboardDto) -> Result<(), String> {
     if d.cols == 0 || d.cols > MAX_COLS {
         return Err(format!("网格列数需在 1–{MAX_COLS}"));
     }
+    match (&d.scope_kind, &d.scope_id) {
+        (None, None) => {}
+        (Some(kind), Some(id)) => {
+            if kind != "device" {
+                return Err(format!("未知的看板作用域 `{kind}`（当前支持 device）"));
+            }
+            if id.is_empty()
+                || id.len() > 64
+                || !id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            {
+                return Err(format!("看板作用域 id `{id}` 非法"));
+            }
+        }
+        _ => return Err("scopeKind 与 scopeId 必须成对出现".into()),
+    }
 
     let mut seen = HashSet::new();
     let mut placements: Vec<&hmi_wire::WidgetLayout> = Vec::new();
@@ -184,6 +201,8 @@ mod tests {
             id: id.into(),
             name: "总览".into(),
             cols: 12,
+            scope_kind: None,
+            scope_id: None,
             widgets: vec![WidgetDto {
                 id: "w1".into(),
                 kind: "value".into(),
@@ -255,6 +274,16 @@ mod tests {
 
         let mut d = sample("has space");
         d.id = "bad id".into();
+        assert!(store.upsert(d).is_err());
+
+        // scope 成对出现，且只支持 device
+        let mut d = sample("scoped");
+        d.scope_kind = Some("device".into());
+        d.scope_id = Some("pm1".into());
+        assert!(store.upsert(d).is_ok());
+
+        let mut d = sample("scoped-bad");
+        d.scope_kind = Some("device".into());
         assert!(store.upsert(d).is_err());
     }
 

@@ -88,6 +88,16 @@ pub enum ClientMsg {
     RemoveUiPlugin {
         id: String,
     },
+    /// 设备类型工作区页面（用户覆盖包默认页面）
+    GetWorkspaces,
+    /// 保存某个设备类型的页面配置（同 deviceType 即覆盖）
+    SaveWorkspace {
+        workspace: WorkspaceDto,
+    },
+    /// 删除某个类型的页面覆盖，回落到设备包默认页面
+    RemoveWorkspace {
+        device_type: String,
+    },
 }
 
 // —— 服务端 → 客户端 ——
@@ -143,6 +153,10 @@ pub enum ServerMsg {
     UiPlugins {
         plugins: Vec<UiPluginDto>,
     },
+    /// 设备类型工作区列表（get/save/remove 的统一应答）
+    Workspaces {
+        workspaces: Vec<WorkspaceDto>,
+    },
     /// 命令成功（kind 与请求对应，如 "writeTag"）
     CommandOk {
         kind: String,
@@ -190,6 +204,9 @@ pub struct DeviceDto {
     pub package: String,
     pub slave: u8,
     pub online: bool,
+    /// 实例级点表覆盖（scale/offset/pollGroup 等），供设置页回填
+    #[serde(default)]
+    pub overrides: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -202,8 +219,52 @@ pub struct PackageDto {
     pub driver: String,
     #[serde(default)]
     pub description: String,
+    /// 设备包声明的默认工作区页面（空 = 宿主 fallback 四页）
+    #[serde(default)]
+    pub ui: PackageUiDto,
     /// 点位定义，供 UI 做点表展示、写值入口与 tag 名映射
     pub points: Vec<PointDto>,
+}
+
+/// 设备包 UI 声明。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageUiDto {
+    #[serde(default)]
+    pub pages: Vec<DevicePageDto>,
+}
+
+/// 设备工作区的一页：由宿主组件按顺序组合。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DevicePageDto {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub icon: String,
+    #[serde(default)]
+    pub components: Vec<DevicePageComponentDto>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DevicePageComponentDto {
+    /// 宿主组件：overview / dashboard / tags / settings
+    pub kind: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub config: serde_json::Value,
+}
+
+/// 某个设备类型的工作区页面配置（workspaces.json）。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceDto {
+    /// 设备类型 = 设备包 id
+    pub device_type: String,
+    #[serde(default)]
+    pub pages: Vec<DevicePageDto>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -256,6 +317,11 @@ pub struct DashboardDto {
     /// 网格列数（默认 12）
     #[serde(default = "default_dashboard_cols")]
     pub cols: u32,
+    /// 作用域：缺省 = 系统全局看板；"device" = 某台设备的工作区看板
+    #[serde(default)]
+    pub scope_kind: Option<String>,
+    #[serde(default)]
+    pub scope_id: Option<String>,
     #[serde(default)]
     pub widgets: Vec<WidgetDto>,
 }
@@ -415,6 +481,8 @@ mod tests {
             id: "main".into(),
             name: "总览".into(),
             cols: 12,
+            scope_kind: None,
+            scope_id: None,
             widgets: vec![WidgetDto {
                 id: "w1".into(),
                 kind: "gauge".into(),
@@ -453,6 +521,8 @@ mod tests {
         let j = r#"{"id":"main","name":"总览","widgets":[]}"#;
         let d: DashboardDto = serde_json::from_str(j).unwrap();
         assert_eq!(d.cols, 12);
+        assert_eq!(d.scope_kind, None);
+        assert_eq!(d.scope_id, None);
         assert!(d.widgets.is_empty());
     }
 
@@ -498,6 +568,44 @@ mod tests {
         assert_eq!(serde_json::from_str::<ClientMsg>(&j).unwrap(), req);
     }
 
+    #[test]
+    fn package_ui_and_workspace_roundtrip() {
+        let page = DevicePageDto {
+            id: "overview".into(),
+            title: "设备概览".into(),
+            icon: "pulse".into(),
+            components: vec![DevicePageComponentDto {
+                kind: "overview".into(),
+                title: String::new(),
+                config: serde_json::json!({ "compact": true }),
+            }],
+        };
+        let pkg = PackageUiDto {
+            pages: vec![page.clone()],
+        };
+        let msg = ClientMsg::SaveWorkspace {
+            workspace: WorkspaceDto {
+                device_type: "com.acme.pm3000".into(),
+                pages: pkg.pages.clone(),
+            },
+        };
+        let j = serde_json::to_string(&msg).unwrap();
+        assert!(j.contains(r#""type":"saveWorkspace""#), "{j}");
+        assert!(j.contains(r#""deviceType":"com.acme.pm3000""#), "{j}");
+        let back: ClientMsg = serde_json::from_str(&j).unwrap();
+        assert_eq!(back, msg);
+
+        let reply = ServerMsg::Workspaces {
+            workspaces: vec![WorkspaceDto {
+                device_type: "com.acme.pm3000".into(),
+                pages: vec![page],
+            }],
+        };
+        let j = serde_json::to_string(&reply).unwrap();
+        assert!(j.contains(r#""type":"workspaces""#), "{j}");
+        assert_eq!(serde_json::from_str::<ServerMsg>(&j).unwrap(), reply);
+    }
+
     /// 回归：点表 DTO 必须能由 UI 端反序列化（bits 若用 u8-key map 会在此失败）。
     #[test]
     fn snapshot_with_bit_points_roundtrip() {
@@ -524,6 +632,7 @@ mod tests {
                 version: "1.2.0".into(),
                 driver: "modbus-rtu".into(),
                 description: String::new(),
+                ui: PackageUiDto::default(),
                 points: vec![PointDto {
                     id: "status".into(),
                     name: "状态字".into(),

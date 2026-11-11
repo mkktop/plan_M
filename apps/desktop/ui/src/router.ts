@@ -4,7 +4,12 @@ export const router = createRouter({
   // 桌面壳加载本地文件，hash 路由最稳（无需服务端 fallback）。
   history: createWebHashHistory(),
   routes: [
-    { path: '/', redirect: '/diagnostics' },
+    { path: '/', redirect: '/home' },
+    {
+      path: '/home',
+      component: () => import('@/pages/HomePage.vue'),
+      meta: { title: '首页' },
+    },
     {
       path: '/diagnostics',
       component: () => import('@/pages/DiagnosticsPage.vue'),
@@ -41,11 +46,16 @@ export const router = createRouter({
       meta: { title: '插件页面' },
     },
     {
+      path: '/t/:typeId/:pageId?',
+      component: () => import('@/pages/DeviceWorkspacePage.vue'),
+      meta: { title: '设备工作区' },
+    },
+    {
       path: '/tags',
       component: () => import('@/pages/TagsPage.vue'),
       meta: { title: '实时点表' },
     },
-    { path: '/:pathMatch(.*)*', redirect: '/diagnostics' },
+    { path: '/:pathMatch(.*)*', redirect: '/home' },
   ],
 })
 

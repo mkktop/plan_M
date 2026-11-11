@@ -8,6 +8,7 @@ use crate::store::{ConfigStore, JsonConfigStore};
 use crate::supervisor::{
     spawn_channel, BusOpener, ChannelHandle, ChannelRuntime, DeviceRuntime, GatewayEvent,
 };
+use crate::workspaces::{workspaces_path, WorkspaceStore};
 use hmi_domain::codec::{encode_num, ByteOrder, DataType, Num};
 use hmi_domain::config::{DeviceConfig, ProjectConfig, SerialChannelConfig};
 use hmi_domain::driver::Driver;
@@ -17,8 +18,9 @@ use hmi_packaging::{
     UiPluginRegistry,
 };
 use hmi_wire::{
-    ChannelDto, DashboardDto, DeviceDto, PackageDto, PointDto, SnapshotData, UiDevicePanelDto,
-    UiPageDto, UiPluginDto, UiWidgetDto,
+    ChannelDto, DashboardDto, DeviceDto, DevicePageComponentDto, DevicePageDto, PackageDto,
+    PackageUiDto, PointDto, SnapshotData, UiDevicePanelDto, UiPageDto, UiPluginDto, UiWidgetDto,
+    WorkspaceDto,
 };
 use semver::Version;
 use std::collections::HashMap;
@@ -36,6 +38,7 @@ pub struct GatewayService {
     ui_plugins: RwLock<UiPluginRegistry>,
     config: RwLock<ProjectConfig>,
     dashboards: RwLock<DashboardStore>,
+    workspaces: RwLock<WorkspaceStore>,
     channels: RwLock<HashMap<String, ChannelHandle>>,
     events: broadcast::Sender<GatewayEvent>,
     store: Box<dyn ConfigStore>,
@@ -58,6 +61,7 @@ impl GatewayService {
         let store = Box::new(JsonConfigStore::new(data_dir.join("config.json")));
         let config = store.load()?;
         let dashboards = DashboardStore::load(dashboards_path(&data_dir));
+        let workspaces = WorkspaceStore::load(workspaces_path(&data_dir));
         let registry = PackageRegistry::scan(&data_dir.join("packages"));
         for (path, why) in &registry.broken {
             tracing::warn!(pkg = %path.display(), reason = %why, "跳过损坏的设备包");
@@ -83,6 +87,7 @@ impl GatewayService {
             ui_plugins: RwLock::new(ui_plugins),
             config: RwLock::new(config),
             dashboards: RwLock::new(dashboards),
+            workspaces: RwLock::new(workspaces),
             channels: RwLock::new(HashMap::new()),
             events,
             store,
@@ -144,6 +149,7 @@ impl GatewayService {
                 package: d.package.clone(),
                 slave: d.slave,
                 online: device_online_of(&d.id, &d.channel_id, &channels),
+                overrides: d.overrides.clone(),
             })
             .collect();
 
@@ -482,6 +488,29 @@ impl GatewayService {
         Ok(store.list())
     }
 
+    // —— 设备类型工作区（用户覆盖包默认页面，落 <data-dir>/workspaces.json）——
+
+    pub async fn workspaces(&self) -> Vec<WorkspaceDto> {
+        self.workspaces.read().await.list()
+    }
+
+    /// 保存某类型的页面配置，返回完整列表。
+    pub async fn save_workspace(
+        &self,
+        workspace: WorkspaceDto,
+    ) -> Result<Vec<WorkspaceDto>, String> {
+        let mut store = self.workspaces.write().await;
+        store.upsert(workspace)?;
+        Ok(store.list())
+    }
+
+    /// 删除类型覆盖，回落到包默认页面；返回完整列表。
+    pub async fn remove_workspace(&self, device_type: &str) -> Result<Vec<WorkspaceDto>, String> {
+        let mut store = self.workspaces.write().await;
+        store.remove(device_type)?;
+        Ok(store.list())
+    }
+
     /// 当前 tag 值（测试/CLI 用）。
     pub fn current_value(&self, tag: &str) -> Option<TagChange> {
         self.hub.get(&TagId::new(tag)).map(|s| TagChange {
@@ -534,6 +563,28 @@ fn package_dto(p: &hmi_packaging::InstalledPackage) -> PackageDto {
         version: p.manifest.version.to_string(),
         driver: p.manifest.protocol.driver.clone(),
         description: p.manifest.description.clone(),
+        ui: PackageUiDto {
+            pages: p
+                .manifest
+                .ui
+                .pages
+                .iter()
+                .map(|page| DevicePageDto {
+                    id: page.id.clone(),
+                    title: page.title.clone(),
+                    icon: page.icon.clone(),
+                    components: page
+                        .components
+                        .iter()
+                        .map(|comp| DevicePageComponentDto {
+                            kind: comp.kind.clone(),
+                            title: comp.title.clone(),
+                            config: comp.config.clone(),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        },
         points: p
             .points
             .points

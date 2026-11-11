@@ -46,6 +46,14 @@ const conn = useConnectionStore()
 const tags = useTagsStore()
 const toast = useToastStore()
 
+const props = withDefaults(
+  defineProps<{
+    embedded?: boolean
+    deviceId?: string
+  }>(),
+  { embedded: false, deviceId: '' },
+)
+
 const selectedId = ref('')
 const filter = ref('')
 
@@ -148,22 +156,33 @@ function resubscribe(): void {
 
 watch([selectedId, selectedPkg], resubscribe)
 
-/** 首次进入按 ?device= 选中；之后保持用户选择。 */
+/** 首次进入按 ?device= 或工作区传入的 deviceId 选中；之后保持用户选择。 */
 let initialQueryApplied = false
 watch(
   () => project.devices,
   (list) => {
     if (!initialQueryApplied && list.length > 0) {
       initialQueryApplied = true
-      const q = route.query.device
+      const q = props.deviceId || route.query.device
       if (typeof q === 'string' && list.some((d) => d.id === q)) selectedId.value = q
-      if (q) void router.replace({ query: {} })
+      if (!props.embedded && q) void router.replace({ query: {} })
+    }
+    if (props.deviceId && list.some((d) => d.id === props.deviceId)) {
+      selectedId.value = props.deviceId
+      return
     }
     if (!selectedId.value || !list.some((d) => d.id === selectedId.value)) {
       selectedId.value = list[0]?.id ?? ''
     }
   },
   { immediate: true },
+)
+
+watch(
+  () => props.deviceId,
+  (id) => {
+    if (id && project.devices.some((d) => d.id === id)) selectedId.value = id
+  },
 )
 
 onBeforeUnmount(() => {
@@ -221,19 +240,23 @@ function gotoDevices(): void {
 </script>
 
 <template>
-  <div class="page tags-page">
-    <PageHeader title="实时点表" subtitle="只订阅当前设备的点位；质量戳随每个值下发">
+  <div class="page tags-page" :class="{ embedded }">
+    <PageHeader
+      v-if="!embedded"
+      title="实时点表"
+      subtitle="只订阅当前设备的点位；质量戳随每个值下发"
+    >
       <span class="live-badge"><span class="live-dot" />LIVE</span>
     </PageHeader>
 
-    <div v-if="!conn.connected" class="banner warn">
+    <div v-if="!conn.connected && !embedded" class="banner warn">
       <AppIcon name="alert" :size="16" />
       <span>未连接 gatewayd，点表不会更新。</span>
       <n-button size="tiny" quaternary @click="router.push('/diagnostics')">去连接</n-button>
     </div>
 
-    <div v-if="project.devices.length" class="tags-layout">
-      <aside class="card device-panel">
+    <div v-if="project.devices.length" class="tags-layout" :class="{ embedded }">
+      <aside v-if="!embedded" class="card device-panel">
         <div class="panel-head">
           <h3>设备</h3>
           <span class="muted small">{{ project.onlineDeviceCount }}/{{ project.devices.length }} 在线</span>
@@ -276,7 +299,7 @@ function gotoDevices(): void {
               <span v-if="lostCount"> · <span class="text-bad">{{ lostCount }} 失联</span></span>
             </div>
           </div>
-          <n-button size="tiny" quaternary @click="router.push({ path: '/devices' })">
+          <n-button v-if="!embedded" size="tiny" quaternary @click="router.push({ path: '/devices' })">
             <template #icon><AppIcon name="chip" :size="14" /></template>
             设备管理
           </n-button>

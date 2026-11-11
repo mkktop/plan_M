@@ -3,15 +3,17 @@
 可扩展、高自定义的工业上位机。核心思路：**声明式设备包 + 双进程架构 + 订阅制实时数据**。
 
 已交付「采集核心 + gatewayd」「Tauri 2 + Vue 3 桌面 UI」「设备包导入 + 仪表盘」
-与「ESM UI 插件」。
+「ESM UI 插件」与「设备类型工作区」。
 采集进程可独立常驻运行，桌面壳只是它的 WebSocket 客户端；UI 崩溃/关闭不影响采集。
 
 ## 架构
 
 ```
 ┌─ UI 进程（Tauri 2 + Vue 3，随时可崩可关）──────────────┐
-│    诊断 / 仪表盘 / 通道 / 设备 / 设备包 / 插件 / 实时点表 │
-│    + 插件贡献的导航页与仪表盘组件（ESM 动态加载）        │
+│ 顶部：设备类型标签（一个设备包 = 一个类型）              │
+│ 左侧：当前类型的页面（设备包声明 + 用户自定义）           │
+│       底部固定「系统」入口（通道 / 设备包 / 插件 …）      │
+│ 页面组件：概览 / 仪表盘 / 实时点表 / 参数设置 + 插件组件  │
 └──────────────┬──────────────────────────────────────┘
                │ WebSocket @127.0.0.1:59120（JSON 消息，token 鉴权）
                │ HTTP /plugins/<id>/<entry>（插件 ESM 静态资源）
@@ -21,6 +23,7 @@
 │ ├─ 轮询编译器（读块合并）     │
 │ ├─ TagHub 实时库（订阅分发）  │
 │ ├─ 设备包注册表（声明式）     │
+│ ├─ 工作区页面存储             │
 │ ├─ UI 插件注册表 + 静态服务   │
 │ └─ axum：/health + /ws + /plugins │
 └───┬─────────┬───────────────┘
@@ -40,9 +43,9 @@
 crates/
 ├─ domain/            纯模型：Tag/Quality/Modbus 地址工程记法/字节序编解码/点表/配置/端口 trait
 ├─ driver-modbus-rtu/ Modbus RTU 驱动：帧编解码、串口传输、虚拟总线 + 内存从站（SimSlave）
-├─ packaging/         设备包与 UI 插件：manifest/点表解析、语义校验、安装（目录/zip）、注册表
-├─ gateway/           运行时：轮询编译器、通道监督器（串行事务/重试/离线/重连）、TagHub、服务编排、
-│                     仪表盘布局存储（dashboards.json）、UI 插件注册表
+├─ packaging/         设备包与 UI 插件：manifest/点表/页面声明解析、语义校验、安装、注册表
+├─ gateway/           运行时：轮询编译器、通道监督器、TagHub、服务编排、
+│                     仪表盘布局（dashboards.json）、设备类型工作区（workspaces.json）
 └─ wire/              gatewayd ↔ UI 的 WS 消息契约（serde，两端共用）
 apps/
 ├─ gatewayd/          CLI：serve / poll / scan / pkg；HTTP 静态服务 /plugins/<id>/<entry>
@@ -60,7 +63,7 @@ examples/ui-plugins/
 
 ```bash
 cargo build --workspace
-cargo test --workspace          # 95 个测试：编解码/帧/虚拟总线端到端/包校验/插件安装/仪表盘存储/WS 协议
+cargo test --workspace          # 103 个测试：编解码/帧/虚拟总线端到端/包校验/插件安装/工作区/仪表盘/WS 协议
 
 # 1) 校验示例设备包
 gatewayd pkg validate examples/packages/pm3000
@@ -74,7 +77,8 @@ gatewayd serve --sim
 #   → ws://127.0.0.1:59120/ws           （token 见启动输出 / <data-dir>/gateway.token）
 #   → http://127.0.0.1:59120/plugins    （已安装 UI 插件清单；资源为 /plugins/<id>/<entry>）
 #   → 数据目录：%APPDATA%/gatewayd（--data-dir 可覆盖）
-#      config.json / gateway.token / packages/ / ui-plugins/ / dashboards.json / logs/
+#      config.json / gateway.token / packages/ / ui-plugins/ /
+#      workspaces.json / dashboards.json / logs/
 
 # 4) 桌面 UI（先保持 serve --sim 运行）
 cd apps/desktop
@@ -101,10 +105,16 @@ ws.send(JSON.stringify({type:'subscribe', tags:['pm1.uab','pm1.status.b0']}));
 // → {type:'changes', items:[{tag:'pm1.uab', value:{f64:220.1}, quality:'good', tsMs:...}]}
 ```
 
-## 桌面 UI（第二～四轮）
+## 桌面 UI（第二～五轮）
 
 Vue 3 + TypeScript + Vite + Pinia；Naive UI 只做表单控件，外壳/表格/弹窗为自绘，便于后续换肤与插件化。
 
+- **设备类型工作区**：顶部标签按已安装设备包生成（一个包 = 一个类型），导入包后立即出现；
+  左侧是该类型的页面导航，底部固定「系统」入口。同类型共享页面，工作区头部下拉切换设备实例；
+  页面由设备包 `ui.pages` 声明，用户可增删/改名/排序页面并组合宿主组件，保存到
+  `<data-dir>/workspaces.json`。
+- **首页**：Hello 欢迎页（时间问候、连接状态、时钟）、关键统计（在线设备/通道/点位/设备包/插件）、
+  快速入口与设备概览；根路径 `/` 自动进入首页。
 - **诊断**：连接状态、WS 地址/token、`/health` 探测与延迟、运行统计、完整通信日志（收发帧摘要）。
 - **仪表盘**：12 列网格画布；数值卡 / 开关 / 仪表三种内置组件，绑定任意设备 tag；编辑模式拖拽移动、
   右下角缩放（不允许重叠），改动防抖自动保存到 gatewayd（`<data-dir>/dashboards.json`）；开关只对
@@ -121,7 +131,7 @@ Vue 3 + TypeScript + Vite + Pinia；Naive UI 只做表单控件，外壳/表格/
   状态字位展开为芯片，`access=rw` 的点可写值（工程量，gatewayd 负责反算 scale/offset）。
 
 基础设施：`ui/src/api/ws.ts` 单例客户端负责 hello/token 握手、指数退避重连、请求响应配对、
-**订阅引用计数去重**、重连后自动重放订阅；Pinia 分为 `connection/project/tags/dashboards/toast`。
+**订阅引用计数去重**、重连后自动重放订阅；Pinia 分为 `connection/project/tags/dashboards/workspaces/plugins/toast`。
 质量色规范：good 绿、bad 黄、uncertain 蓝、comm_lost 灰（保留最后好值，UI 不显示假数据）。
 Tauri 侧只加了一个 `tauri-plugin-dialog`（文件/目录选择）与 `gateway_info`，业务真值仍在 gatewayd。
 
@@ -171,6 +181,40 @@ Tauri 侧只加了一个 `tauri-plugin-dialog`（文件/目录选择）与 `gate
   30 点的设备通常只需 3~4 个事务。
 - 实例覆盖：设备实例可用 `overrides` 单点改 `scale`/`offset`/`pollGroup`（同型号多台不复制点表）。
 - 编辑器支持：`crates/packaging/schema/*.schema.json` 可直接给 VS Code 做补全校验。
+
+## 设备类型工作区（页面声明）
+
+设备包可在 manifest 里声明该类型的默认页面；**程序只提供组件，页面由包组合**：
+
+```json
+"ui": {
+  "pages": [
+    { "id": "overview", "title": "设备概览", "icon": "pulse",
+      "components": [{ "kind": "overview" }] },
+    { "id": "dashboard", "title": "仪表盘", "icon": "layout",
+      "components": [{ "kind": "dashboard" }] },
+    { "id": "my-page", "title": "我的页面", "icon": "grid",
+      "components": [{ "kind": "overview", "title": "状态" },
+                     { "kind": "tags", "title": "实时值" }] }
+  ]
+}
+```
+
+宿主组件白名单（v1）：
+
+- `overview`：设备状态/质量统计/通道与包信息；
+- `dashboard`：当前设备的仪表盘画布（每个实例独立布局）；
+- `tags`：当前设备的实时点表与写值；
+- `settings`：设备实例名称/通道/从站/overrides。
+
+规则：
+
+- 包未声明 `ui` 时使用宿主内置四页（概览/仪表盘/实时点表/参数设置），旧包无需修改。
+- 页面按**类型共享**；用户在工作区点「编辑页面」可增删页面、改名、排序，并在页面里组合多个组件。
+- 用户修改保存到 `<data-dir>/workspaces.json`；「恢复包默认页面」会删除该类型覆盖。
+- 包升级不会自动覆盖已保存的自定义页面；需要新默认页面时点恢复。
+- 顶部类型标签 = 已安装设备包（一个包一个类型），导入后立即出现；无设备时工作区显示添加引导。
+- 设备实例切换只影响组件数据；仪表盘按实例独立保存（`DashboardDto.scopeKind=device`）。
 
 ## UI 插件（ESM）
 
@@ -223,19 +267,26 @@ export function mount(el, ctx, props) {
 `writeTag{tag,value}` / `scanChannel{channel,range}` / `getSerialPorts` / `getPackages` /
 `upsertChannel` / `removeChannel` / `addDevice` / `removeDevice` / `importPackage{path}` /
 `getDashboards` / `saveDashboard{dashboard}` / `removeDashboard{id}` /
-`getUiPlugins` / `importUiPlugin{path}` / `removeUiPlugin{id}`
+`getUiPlugins` / `importUiPlugin{path}` / `removeUiPlugin{id}` /
+`getWorkspaces` / `saveWorkspace{workspace}` / `removeWorkspace{deviceType}`
 
 服务端 → 客户端：`welcome` / `snapshot` / `changes{items}`（10~20ms 合并批量）/
 `channelState` / `deviceState` / `scanProgress` / `scanDone` / `serialPorts` / `packages` /
-`dashboards` / `uiPlugins` / `commandOk` / `error`
+`dashboards` / `uiPlugins` / `workspaces` / `commandOk` / `error`
 
-仪表盘布局（`DashboardDto`）：`{ id, name, cols, widgets[] }`；widget 为
+仪表盘布局（`DashboardDto`）：`{ id, name, cols, scopeKind?, scopeId?, widgets[] }`；widget 为
 `{ id, kind, title, tag, unit, config, layout{x,y,w,h} }`。`config` 由组件自行解释
 （内置 value=`decimals`、switch=`onLabel/offLabel`、gauge=`min/max`，插件组件由插件解释）。
-gatewayd 保存时校验 id/边界/**组件不重叠**，布局属工程数据，UI 可重装。
+`scopeKind/scopeId` 缺省 = 系统全局看板；`device` = 某台设备工作区看板。
+gatewayd 保存时校验 id/边界/**组件不重叠**/scope，布局属工程数据，UI 可重装。
 
 UI 插件（`UiPluginDto`）：`{ id, name, version, sdkVersion, permissions[], entry, widgets[], pages[], devicePanels[] }`。
 `getUiPlugins/importUiPlugin/removeUiPlugin` 统一以 `uiPlugins` 返回完整列表；安装支持目录或 zip。
+
+设备工作区（`WorkspaceDto`）：`{ deviceType, pages[] }`；page 为
+`{ id, title, icon, components[{ kind, title, config }] }`。`deviceType` 是设备包 id；
+`getWorkspaces/saveWorkspace/removeWorkspace` 统一以 `workspaces` 返回完整列表。
+`PackageDto.ui.pages` 提供包默认页面，`workspaces` 保存用户覆盖。
 
 ## 下一轮：报警 + 历史
 
@@ -251,7 +302,10 @@ UI 插件（`UiPluginDto`）：`{ id, name, version, sdkVersion, permissions[], 
 - Tauri 尚未自动拉起 gatewayd（sidecar 在后续轮次）；开发期先手动 `serve`
 - 浏览器调试模式导入设备包需要 gatewayd 本机路径；拖放/文件对话框只在桌面壳内可用
 - 仪表盘布局是「最后写入者胜」，多人同时编辑同一看板不做冲突合并
+- 设备类型 = 设备包；同一类型共享页面配置，但仪表盘按设备实例独立保存
+- 用户保存的工作区页面不会随设备包升级自动合并；需要新默认页面时点「恢复包默认页面」
 - 历史/报警未落库（SQLite 已留好位置）
 - `scanChannel` 在 WS 会话内同步执行（几十秒级；扫描期间该连接的其他请求会排队）
 - UI 插件 v1 与宿主同 webview：manifest 权限是能力门面而非强沙箱；`devicePanels` 贡献点已解析但不渲染
+- 插件贡献的导航页目前属于系统工作区；设备类型专属插件页/面板留到后续
 - Tauri CSP 已启用（放行 `127.0.0.1:59120` 的脚本/连接/图片；dev 模式另放行 1420）

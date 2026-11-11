@@ -4,35 +4,89 @@ import { useRoute, useRouter } from 'vue-router'
 import { darkTheme, dateZhCN, zhCN, type GlobalThemeOverrides } from 'naive-ui'
 import AppIcon from '@/components/AppIcon.vue'
 import ConnectionPill from '@/components/ConnectionPill.vue'
+import DeviceTypeTabs from '@/components/DeviceTypeTabs.vue'
 import ToastStack from '@/components/ToastStack.vue'
 import { gateway, isTauriRuntime, resolveGatewaySettings } from '@/api/ws'
 import { installGatewayBridge } from '@/api/bridge'
 import { pluginHost } from '@/plugins/host'
+import { useProjectStore } from '@/stores/project'
+import { useWorkspacesStore } from '@/stores/workspaces'
+import { pagesForPackage } from '@/utils/devicePages'
 import { nowMs } from '@/utils/clock'
 
 const route = useRoute()
 const router = useRouter()
+const project = useProjectStore()
+const workspaces = useWorkspacesStore()
 
-const baseNav = [
+interface NavItem {
+  path: string
+  label: string
+  desc: string
+  icon: string
+  query?: Record<string, string>
+}
+
+const baseNav: NavItem[] = [
+  { path: '/home', label: '首页', desc: '欢迎与总览', icon: 'home' },
   { path: '/diagnostics', label: '诊断', desc: '连接与健康', icon: 'pulse' },
-  { path: '/dashboard', label: '仪表盘', desc: '组态视图', icon: 'layout' },
+  { path: '/dashboard', label: '仪表盘', desc: '全局组态', icon: 'layout' },
   { path: '/channels', label: '通道', desc: '串口与总线', icon: 'plug' },
   { path: '/devices', label: '设备', desc: '从站与实例', icon: 'chip' },
   { path: '/packages', label: '设备包', desc: '型号与点表', icon: 'package' },
   { path: '/plugins', label: '插件', desc: 'ESM UI 扩展', icon: 'plugin' },
-  { path: '/tags', label: '实时点表', desc: '在线数据', icon: 'grid' },
+  { path: '/tags', label: '实时点表', desc: '全局数据', icon: 'grid' },
 ]
 
-// 插件页面贡献点动态追加到导航（插件删除后自动消失）。
-const nav = computed(() => [
-  ...baseNav,
-  ...pluginHost.pages.map((p) => ({
-    path: p.path,
-    label: p.title,
-    desc: p.pluginName,
-    icon: p.icon,
-  })),
-])
+const activeTypeId = computed(() =>
+  typeof route.params.typeId === 'string' ? route.params.typeId : '',
+)
+const inDeviceWorkspace = computed(() => Boolean(activeTypeId.value))
+const activePackage = computed(() =>
+  activeTypeId.value ? project.packageById.get(activeTypeId.value) ?? null : null,
+)
+const devicePages = computed(() =>
+  activePackage.value
+    ? pagesForPackage(activePackage.value, workspaces.get(activePackage.value.id))
+    : [],
+)
+const activePageId = computed(() =>
+  typeof route.params.pageId === 'string' ? route.params.pageId : '',
+)
+const activePage = computed(
+  () => devicePages.value.find((p) => p.id === activePageId.value) ?? devicePages.value[0] ?? null,
+)
+
+// 切页时保留当前设备实例选择。
+const deviceQuery = computed<Record<string, string>>(() => {
+  const out: Record<string, string> = {}
+  const d = route.query.device
+  if (typeof d === 'string' && d) out.device = d
+  return out
+})
+
+// 设备模式：左侧是类型页面；系统模式：全局页面 + 插件导航页。
+const nav = computed<NavItem[]>(() => {
+  if (inDeviceWorkspace.value) {
+    return devicePages.value.map((page) => ({
+      path: `/t/${activeTypeId.value}/${page.id}`,
+      label: page.title,
+      desc: '设备页面',
+      icon: page.icon || 'grid',
+      query: deviceQuery.value,
+    }))
+  }
+  return [
+    ...baseNav,
+    ...pluginHost.pages.map((p) => ({
+      path: p.path,
+      label: p.title,
+      desc: p.pluginName,
+      icon: p.icon,
+      query: undefined,
+    })),
+  ]
+})
 
 const themeOverrides: GlobalThemeOverrides = {
   common: {
@@ -67,7 +121,19 @@ const themeOverrides: GlobalThemeOverrides = {
   },
 }
 
-const title = computed(() => (route.meta.title as string | undefined) ?? '上位机平台')
+const title = computed(() => {
+  if (activePackage.value) {
+    return activePage.value
+      ? `${activePackage.value.name} · ${activePage.value.title}`
+      : activePackage.value.name
+  }
+  return (route.meta.title as string | undefined) ?? '首页'
+})
+const kicker = computed(() =>
+  activePackage.value
+    ? `设备工作区 · ${activePackage.value.vendor || activePackage.value.id}`
+    : '工业数据采集 · 上位机平台',
+)
 const clock = computed(() =>
   new Date(nowMs.value).toLocaleTimeString('zh-CN', { hour12: false }),
 )
@@ -101,11 +167,17 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
+        <div v-if="inDeviceWorkspace" class="rail-context">
+          <span class="rail-context-label">设备类型</span>
+          <strong>{{ activePackage?.name || activeTypeId }}</strong>
+          <span class="mono muted small">{{ activeTypeId }}</span>
+        </div>
+
         <nav class="nav">
           <router-link
             v-for="item in nav"
             :key="item.path"
-            :to="item.path"
+            :to="item.query ? { path: item.path, query: item.query } : item.path"
             class="nav-item"
             active-class="active"
           >
@@ -116,6 +188,22 @@ onBeforeUnmount(() => {
             </span>
           </router-link>
         </nav>
+
+        <div class="rail-system-wrap">
+          <button
+            type="button"
+            class="rail-system"
+            :class="{ active: !inDeviceWorkspace }"
+            title="返回系统页面"
+            @click="router.push('/home')"
+          >
+            <AppIcon name="settings" :size="17" />
+            <span class="nav-text">
+              <span>系统</span>
+              <small>通道 / 设备包 / 插件</small>
+            </span>
+          </button>
+        </div>
 
         <div class="rail-foot">
           <div class="rail-status">
@@ -129,7 +217,7 @@ onBeforeUnmount(() => {
       <div class="main">
         <header class="topbar">
           <div class="crumb">
-            <span class="crumb-kicker">工业数据采集 · 上位机平台</span>
+            <span class="crumb-kicker">{{ kicker }}</span>
             <h1>{{ title }}</h1>
           </div>
           <div class="topbar-right">
@@ -137,6 +225,8 @@ onBeforeUnmount(() => {
             <ConnectionPill @click="router.push('/diagnostics')" />
           </div>
         </header>
+
+        <DeviceTypeTabs />
 
         <main class="content">
           <router-view />
