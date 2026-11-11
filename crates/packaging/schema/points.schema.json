@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hmi.local/schemas/points.schema.json",
+  "title": "设备包点表",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "pollGroups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "intervalMs": { "type": "integer", "minimum": 50, "default": 1000 }
+        }
+      }
+    },
+    "points": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/point" }
+    }
+  },
+  "definitions": {
+    "point": {
+      "type": "object",
+      "required": ["id", "register"],
+      "additionalProperties": true,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "description": "点内唯一标识；tag 全名 = <设备id>.<pointId>"
+        },
+        "name": { "type": "string", "description": "显示名" },
+        "register": {
+          "type": "string",
+          "description": "Modbus 地址：工程记法（40101/30001/00010/10010，或 6 位 400001）或显式记法（HR:100/IR:5/C:3/DR:7）"
+        },
+        "type": {
+          "enum": ["u16", "i16", "u32", "i32", "u64", "f32", "f64", "bcd16", "bcd32"],
+          "default": "u16"
+        },
+        "byteOrder": { "enum": ["abcd", "badc", "cdab", "dcba"] },
+        "scale": { "type": "number", "description": "工程量换算 value*scale+offset" },
+        "offset": { "type": "number" },
+        "unit": { "type": "string" },
+        "access": { "enum": ["r", "rw"], "default": "r" },
+        "pollGroup": { "type": "string" },
+        "bits": {
+          "type": "object",
+          "description": "状态字位展开：位号(0-15) → 定义；生成 <point>.b<N> 子 tag",
+          "patternProperties": {
+            "^(1?[0-9])$": {
+              "type": "object",
+              "required": ["name"],
+              "properties": {
+                "name": { "type": "string" },
+                "on": { "type": "string" },
+                "off": { "type": "string" }
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  }
+}

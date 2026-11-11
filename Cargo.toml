@@ -1,0 +1,59 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/domain",
+    "crates/wire",
+    "crates/gateway",
+    "crates/driver-modbus-rtu",
+    "crates/packaging",
+    "apps/gatewayd",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT"
+
+[workspace.dependencies]
+# internal
+hmi-domain = { path = "crates/domain" }
+hmi-wire = { path = "crates/wire" }
+hmi-gateway = { path = "crates/gateway" }
+hmi-packaging = { path = "crates/packaging" }
+hmi-driver-modbus-rtu = { path = "crates/driver-modbus-rtu" }
+
+# async / serialization
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+
+# errors / logging
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+# app / server
+clap = { version = "4", features = ["derive"] }
+axum = { version = "0.8", features = ["ws"] }
+
+# serial
+serialport = "4"
+tokio-serial = "5"
+
+# utils
+dashmap = "6"
+semver = { version = "1", features = ["serde"] }
+dirs = "5"
+uuid = { version = "1", features = ["v4"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# dev
+tokio-tungstenite = "0.26"
+
+[profile.release]
+lto = "thin"
+strip = true

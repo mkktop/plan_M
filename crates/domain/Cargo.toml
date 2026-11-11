@@ -1,0 +1,12 @@
+[package]
+name = "hmi-domain"
+description = "纯领域模型：Tag/质量戳/Modbus 地址/字节序编解码/点表/工程配置/通信端口定义"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }

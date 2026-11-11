@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hmi.local/schemas/manifest.schema.json",
+  "title": "设备包 manifest",
+  "type": "object",
+  "required": ["schemaVersion", "id", "name", "version", "protocol"],
+  "additionalProperties": true,
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(\\.[a-z0-9-]+)+$",
+      "description": "包 id，小写点分（如 com.acme.pm3000）"
+    },
+    "name": { "type": "string", "minLength": 1 },
+    "vendor": { "type": "string" },
+    "description": { "type": "string" },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+" },
+    "minHostVersion": { "type": "string" },
+    "protocol": {
+      "type": "object",
+      "required": ["driver"],
+      "properties": {
+        "driver": { "type": "string", "enum": ["modbus-rtu"] },
+        "defaults": {
+          "type": "object",
+          "properties": {
+            "byteOrder": { "enum": ["abcd", "badc", "cdab", "dcba"] },
+            "respTimeoutMs": { "type": "integer", "minimum": 20, "maximum": 10000 }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,20 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Node (下一轮前端)
+node_modules/
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# 运行期数据（本地调试产生的 gatewayd 数据目录）
+data/
+*.token
+
+# OS
+Thumbs.db
+.DS_Store

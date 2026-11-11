@@ -1,0 +1,134 @@
+{
+  "pollGroups": [
+    { "name": "fast", "intervalMs": 1000 },
+    { "name": "slow", "intervalMs": 60000 }
+  ],
+  "points": [
+    {
+      "id": "uab",
+      "name": "AB线电压",
+      "register": "40101",
+      "type": "u16",
+      "scale": 0.1,
+      "unit": "V",
+      "access": "r",
+      "pollGroup": "fast"
+    },
+    {
+      "id": "ubc",
+      "name": "BC线电压",
+      "register": "40102",
+      "type": "u16",
+      "scale": 0.1,
+      "unit": "V",
+      "pollGroup": "fast"
+    },
+    {
+      "id": "uca",
+      "name": "CA线电压",
+      "register": "40103",
+      "type": "u16",
+      "scale": 0.1,
+      "unit": "V",
+      "pollGroup": "fast"
+    },
+    {
+      "id": "ia",
+      "name": "A相电流",
+      "register": "40104",
+      "type": "u16",
+      "scale": 0.01,
+      "unit": "A",
+      "pollGroup": "fast"
+    },
+    {
+      "id": "ib",
+      "name": "B相电流",
+      "register": "40105",
+      "type": "u16",
+      "scale": 0.01,
+      "unit": "A",
+      "pollGroup": "fast"
+    },
+    {
+      "id": "ic",
+      "name": "C相电流",
+      "register": "40106",
+      "type": "u16",
+      "scale": 0.01,
+      "unit": "A",
+      "pollGroup": "fast"
+    },
+    {
+      "id": "p",
+      "name": "有功功率",
+      "register": "40107",
+      "type": "i32",
+      "byteOrder": "cdab",
+      "scale": 0.1,
+      "unit": "W",
+      "pollGroup": "fast"
+    },
+    {
+      "id": "q",
+      "name": "无功功率",
+      "register": "40109",
+      "type": "i32",
+      "byteOrder": "cdab",
+      "scale": 0.1,
+      "unit": "var",
+      "pollGroup": "fast"
+    },
+    {
+      "id": "freq",
+      "name": "频率",
+      "register": "40115",
+      "type": "u16",
+      "scale": 0.01,
+      "unit": "Hz",
+      "pollGroup": "fast"
+    },
+    {
+      "id": "energy",
+      "name": "有功电度",
+      "register": "40200",
+      "type": "u32",
+      "byteOrder": "cdab",
+      "scale": 0.01,
+      "unit": "kWh",
+      "pollGroup": "slow"
+    },
+    {
+      "id": "reactive_energy",
+      "name": "无功电度",
+      "register": "40202",
+      "type": "u32",
+      "byteOrder": "cdab",
+      "scale": 0.01,
+      "unit": "kvarh",
+      "pollGroup": "slow"
+    },
+    {
+      "id": "status",
+      "name": "状态字",
+      "register": "40300",
+      "type": "u16",
+      "pollGroup": "fast",
+      "bits": {
+        "0": { "name": "运行", "on": "运行中", "off": "停止" },
+        "1": { "name": "通信", "on": "正常", "off": "异常" },
+        "2": { "name": "报警", "on": "报警", "off": "正常" }
+      }
+    },
+    {
+      "id": "setpoint",
+      "name": "功率上限设定",
+      "register": "40310",
+      "type": "u16",
+      "scale": 1,
+      "unit": "W",
+      "access": "rw",
+      "pollGroup": "fast"
+    }
+  ]
+}

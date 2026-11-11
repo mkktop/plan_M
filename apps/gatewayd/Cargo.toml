@@ -1,0 +1,35 @@
+[package]
+name = "hmi-gatewayd"
+description = "采集网关守护进程：serve（WS 服务）/ poll / scan / pkg 命令行"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "gatewayd"
+path = "src/main.rs"
+
+[dependencies]
+hmi-domain = { workspace = true }
+hmi-wire = { workspace = true }
+hmi-gateway = { workspace = true }
+hmi-packaging = { workspace = true }
+hmi-driver-modbus-rtu = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+clap = { workspace = true }
+axum = { workspace = true }
+semver = { workspace = true }
+dirs = { workspace = true }
+uuid = { workspace = true }
+futures = { workspace = true }
+
+[dev-dependencies]
+tokio-tungstenite = { workspace = true }
+tempfile = "3"

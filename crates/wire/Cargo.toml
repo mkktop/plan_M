@@ -1,0 +1,13 @@
+[package]
+name = "hmi-wire"
+description = "gatewayd ↔ UI 的 WebSocket 消息契约（serde JSON over WS）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+hmi-domain = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

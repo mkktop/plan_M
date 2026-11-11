@@ -1,0 +1,23 @@
+[package]
+name = "hmi-gateway"
+description = "采集运行时：TagHub 实时库、轮询编译器（读块合并）、通道监督器（串行事务/重试/重连）、服务编排"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+hmi-domain = { workspace = true }
+hmi-packaging = { workspace = true }
+hmi-wire = { workspace = true }
+tokio = { workspace = true }
+dashmap = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+serde_json = { workspace = true }
+semver = { workspace = true }
+
+[dev-dependencies]
+hmi-driver-modbus-rtu = { workspace = true }
+tempfile = "3"

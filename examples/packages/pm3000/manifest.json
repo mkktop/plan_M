@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "com.acme.pm3000",
+  "name": "ACME PM3000 三相电表",
+  "vendor": "ACME",
+  "description": "示例设备包：Modbus RTU 三相电表，覆盖 u16/u32/i32/BCD/位展开/可写点的典型用法",
+  "version": "1.2.0",
+  "minHostVersion": "0.1.0",
+  "protocol": {
+    "driver": "modbus-rtu",
+    "defaults": {
+      "byteOrder": "abcd",
+      "respTimeoutMs": 150
+    }
+  }
+}

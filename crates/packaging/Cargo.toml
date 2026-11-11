@@ -1,0 +1,18 @@
+[package]
+name = "hmi-packaging"
+description = "设备包：manifest/点表解析、语义校验、安装、注册表（目录为真相源）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+hmi-domain = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+semver = { workspace = true }
+zip = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
