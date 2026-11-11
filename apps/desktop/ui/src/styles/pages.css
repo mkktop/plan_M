@@ -719,6 +719,222 @@
   margin-top: 14px;
 }
 
+/* —— UI 插件页 —— */
+
+.plugin-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 0 2px;
+}
+
+.plugin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 14px;
+}
+
+.plugin-card {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 14px 16px;
+  min-width: 0;
+}
+
+.plugin-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.plugin-glyph {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(77, 181, 255, 0.28);
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.plugin-card-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.plugin-card-title strong {
+  font-size: 13px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-card-title code {
+  color: var(--text-3);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-version {
+  flex: none;
+  color: var(--text-2);
+  font-size: 11px;
+}
+
+.plugin-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-2);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.plugin-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.perm-chip {
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-2);
+  font-size: 10px;
+}
+
+.plugin-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.plugin-stats b {
+  color: var(--text-1);
+  font-weight: 650;
+}
+
+.plugin-ok,
+.plugin-error {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  font-size: 11px;
+  min-width: 0;
+}
+
+.plugin-ok {
+  border: 1px solid rgba(53, 211, 153, 0.2);
+  background: rgba(53, 211, 153, 0.06);
+  color: var(--text-2);
+}
+
+.plugin-ok code {
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: 10px;
+}
+
+.plugin-error {
+  border: 1px solid rgba(245, 185, 66, 0.28);
+  background: rgba(245, 185, 66, 0.07);
+  color: #f5c96a;
+  word-break: break-word;
+}
+
+.plugin-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: auto;
+  padding-top: 6px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.plugin-doc {
+  padding: 16px 18px;
+}
+
+.plugin-doc h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.plugin-doc pre {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 1.6;
+  overflow: auto;
+}
+
+.plugin-doc p {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.7;
+}
+
+/* 仪表盘里的插件 widget 容器：插件自己负责内部布局。 */
+.plugin-widget-host {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  padding: 2px 10px 9px;
+}
+
+.plugin-widget-slot {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.plugin-widget-error {
+  position: absolute;
+  inset: 0;
+  justify-content: center;
+  background: rgba(10, 13, 18, 0.86);
+  padding: 8px 12px;
+}
+
+.plugin-widget-error code {
+  font-size: 9.5px;
+  color: var(--text-3);
+  word-break: break-word;
+}
+
+.plugin-page-card {
+  padding: 18px 20px;
+}
+
+.plugin-page-host {
+  min-height: 240px;
+}
+
 @media (max-width: 1180px) {
   .pkg-layout {
     grid-template-columns: minmax(0, 1fr);

@@ -7,19 +7,32 @@ import ConnectionPill from '@/components/ConnectionPill.vue'
 import ToastStack from '@/components/ToastStack.vue'
 import { gateway, isTauriRuntime, resolveGatewaySettings } from '@/api/ws'
 import { installGatewayBridge } from '@/api/bridge'
+import { pluginHost } from '@/plugins/host'
 import { nowMs } from '@/utils/clock'
 
 const route = useRoute()
 const router = useRouter()
 
-const nav = [
+const baseNav = [
   { path: '/diagnostics', label: '诊断', desc: '连接与健康', icon: 'pulse' },
   { path: '/dashboard', label: '仪表盘', desc: '组态视图', icon: 'layout' },
   { path: '/channels', label: '通道', desc: '串口与总线', icon: 'plug' },
   { path: '/devices', label: '设备', desc: '从站与实例', icon: 'chip' },
   { path: '/packages', label: '设备包', desc: '型号与点表', icon: 'package' },
+  { path: '/plugins', label: '插件', desc: 'ESM UI 扩展', icon: 'plugin' },
   { path: '/tags', label: '实时点表', desc: '在线数据', icon: 'grid' },
 ]
+
+// 插件页面贡献点动态追加到导航（插件删除后自动消失）。
+const nav = computed(() => [
+  ...baseNav,
+  ...pluginHost.pages.map((p) => ({
+    path: p.path,
+    label: p.title,
+    desc: p.pluginName,
+    icon: p.icon,
+  })),
+])
 
 const themeOverrides: GlobalThemeOverrides = {
   common: {

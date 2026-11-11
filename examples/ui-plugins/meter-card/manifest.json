@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "com.example.meter-card",
+  "name": "示例插件 · 仪表卡片",
+  "version": "1.0.0",
+  "sdkVersion": 1,
+  "description": "框架无关的 ESM UI 插件示例：一个带阈值环的仪表盘卡片，以及一个独立导航页。",
+  "author": "plan_M",
+  "entry": "index.js",
+  "permissions": ["tags:subscribe", "notify"],
+  "widgets": [
+    {
+      "id": "meter",
+      "name": "仪表卡片",
+      "description": "绑定任意数值 tag，显示数值/单位/质量与进度环；config 支持 min / max / decimals。",
+      "defaultW": 3,
+      "defaultH": 2
+    }
+  ],
+  "pages": [
+    { "id": "about", "title": "插件示例", "icon": "plugin" }
+  ],
+  "devicePanels": []
+}

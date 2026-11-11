@@ -79,6 +79,15 @@ pub enum ClientMsg {
     RemoveDashboard {
         id: String,
     },
+    /// 已安装的 UI 插件清单
+    GetUiPlugins,
+    /// 导入 UI 插件（gatewayd 本机路径，目录或 zip）
+    ImportUiPlugin {
+        path: String,
+    },
+    RemoveUiPlugin {
+        id: String,
+    },
 }
 
 // —— 服务端 → 客户端 ——
@@ -129,6 +138,10 @@ pub enum ServerMsg {
     /// 仪表盘列表（get/save/remove 的统一应答）
     Dashboards {
         dashboards: Vec<DashboardDto>,
+    },
+    /// UI 插件列表（get/import/remove 的统一应答）
+    UiPlugins {
+        plugins: Vec<UiPluginDto>,
     },
     /// 命令成功（kind 与请求对应，如 "writeTag"）
     CommandOk {
@@ -280,6 +293,76 @@ pub struct WidgetLayout {
     pub h: u32,
 }
 
+// —— UI 插件（ESM；浏览器侧动态 import gatewayd 的静态资源）——
+
+/// 已安装的 UI 插件。入口文件通过 `GET /plugins/<id>/<entry>` 提供。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiPluginDto {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub author: String,
+    pub sdk_version: u32,
+    #[serde(default)]
+    pub permissions: Vec<String>,
+    #[serde(default = "default_plugin_entry")]
+    pub entry: String,
+    #[serde(default)]
+    pub widgets: Vec<UiWidgetDto>,
+    #[serde(default)]
+    pub pages: Vec<UiPageDto>,
+    #[serde(default)]
+    pub device_panels: Vec<UiDevicePanelDto>,
+}
+
+fn default_plugin_entry() -> String {
+    "index.js".into()
+}
+
+/// 仪表盘组件贡献点。前端渲染 kind 约定为 `plugin:<插件id>:<widget id>`。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiWidgetDto {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_widget_w")]
+    pub default_w: u32,
+    #[serde(default = "default_widget_h")]
+    pub default_h: u32,
+}
+
+fn default_widget_w() -> u32 {
+    3
+}
+
+fn default_widget_h() -> u32 {
+    2
+}
+
+/// 导航页贡献点；前端路由为 `/plugin/<插件id>/<page id>`。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiPageDto {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub icon: String,
+}
+
+/// 设备详情面板贡献点（v1 仅展示，不渲染）。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiDevicePanelDto {
+    pub id: String,
+    pub title: String,
+}
+
 /// 供 CLI/测试快速构造变更消息。
 pub fn changes(items: Vec<TagChange>) -> ServerMsg {
     ServerMsg::Changes { items }
@@ -371,6 +454,48 @@ mod tests {
         let d: DashboardDto = serde_json::from_str(j).unwrap();
         assert_eq!(d.cols, 12);
         assert!(d.widgets.is_empty());
+    }
+
+    #[test]
+    fn ui_plugin_msg_roundtrip() {
+        let plugin = UiPluginDto {
+            id: "com.example.meter-card".into(),
+            name: "示例卡片".into(),
+            version: "1.0.0".into(),
+            description: "demo".into(),
+            author: "plan_M".into(),
+            sdk_version: 1,
+            permissions: vec!["tags:subscribe".into()],
+            entry: "index.js".into(),
+            widgets: vec![UiWidgetDto {
+                id: "meter".into(),
+                name: "仪表卡片".into(),
+                description: String::new(),
+                default_w: 3,
+                default_h: 2,
+            }],
+            pages: vec![UiPageDto {
+                id: "about".into(),
+                title: "关于".into(),
+                icon: "plugin".into(),
+            }],
+            device_panels: vec![],
+        };
+        let msg = ServerMsg::UiPlugins {
+            plugins: vec![plugin],
+        };
+        let j = serde_json::to_string(&msg).unwrap();
+        assert!(j.contains(r#""type":"uiPlugins""#), "{j}");
+        assert!(j.contains(r#""sdkVersion":1"#), "{j}");
+        let back: ServerMsg = serde_json::from_str(&j).unwrap();
+        assert_eq!(msg, back);
+
+        let req = ClientMsg::ImportUiPlugin {
+            path: "/tmp/plugin".into(),
+        };
+        let j = serde_json::to_string(&req).unwrap();
+        assert!(j.contains(r#""type":"importUiPlugin""#), "{j}");
+        assert_eq!(serde_json::from_str::<ClientMsg>(&j).unwrap(), req);
     }
 
     /// 回归：点表 DTO 必须能由 UI 端反序列化（bits 若用 u8-key map 会在此失败）。

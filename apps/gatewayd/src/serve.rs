@@ -2,15 +2,16 @@
 
 use crate::HOST_VERSION;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::State;
-use axum::response::Response;
+use axum::extract::{Path, State};
+use axum::http::{header, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use hmi_domain::driver::Driver;
 use hmi_domain::value::TagId;
 use hmi_gateway::supervisor::GatewayEvent;
 use hmi_gateway::GatewayService;
-use hmi_wire::{ClientMsg, ServerMsg};
+use hmi_wire::{ClientMsg, ServerMsg, UiPluginDto};
 use semver::Version;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -112,6 +113,9 @@ pub fn build_router(state: SharedState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/ws", get(ws_upgrade))
+        // UI 插件：清单 + ESM/资源静态服务（webview 直接动态 import）。
+        .route("/plugins", get(ui_plugin_list))
+        .route("/plugins/{id}/{*path}", get(ui_plugin_asset))
         .with_state(state)
 }
 
@@ -128,6 +132,122 @@ async fn health() -> impl axum::response::IntoResponse {
             "version": HOST_VERSION,
         })),
     )
+}
+
+/// 插件清单（HTTP 版，便于外部工具/调试；UI 走 WS 的 `getUiPlugins`）。
+async fn ui_plugin_list(State(state): State<SharedState>) -> Response {
+    let plugins: Vec<UiPluginDto> = state.service.ui_plugins().await;
+    (
+        [(
+            header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            HeaderValue::from_static("*"),
+        )],
+        Json(plugins),
+    )
+        .into_response()
+}
+
+/// 插件静态资源：`/plugins/<id>/<entry>`。
+///
+/// webview 里 `import()` 是跨源请求，必须有 CORS；插件升级后 URL 带版本查询串，
+/// 这里仍用 `no-cache` 保证开发期改文件后刷新即生效。
+async fn ui_plugin_asset(
+    Path((id, relative)): Path<(String, String)>,
+    State(state): State<SharedState>,
+) -> Response {
+    if !valid_plugin_id_segment(&id) {
+        return plugin_error(StatusCode::BAD_REQUEST, "非法插件 id");
+    }
+    let rel = std::path::Path::new(&relative);
+    if rel.is_absolute()
+        || rel
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+    {
+        return plugin_error(StatusCode::BAD_REQUEST, "非法插件资源路径");
+    }
+
+    let Some(base) = state.service.ui_plugin_dir(&id).await else {
+        return plugin_error(StatusCode::NOT_FOUND, "插件未安装");
+    };
+    let file = base.join(rel);
+    let Ok(canon_base) = std::fs::canonicalize(&base) else {
+        return plugin_error(StatusCode::NOT_FOUND, "插件未安装");
+    };
+    let Ok(canon_file) = std::fs::canonicalize(&file) else {
+        return plugin_error(StatusCode::NOT_FOUND, "插件资源不存在");
+    };
+    if !canon_file.starts_with(&canon_base) || !canon_file.is_file() {
+        return plugin_error(StatusCode::FORBIDDEN, "插件资源路径越界");
+    }
+
+    let data = match tokio::fs::read(&canon_file).await {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!(file = %canon_file.display(), error = %e, "读取插件资源失败");
+            return plugin_error(StatusCode::INTERNAL_SERVER_ERROR, "读取插件资源失败");
+        }
+    };
+    (
+        [
+            (
+                header::ACCESS_CONTROL_ALLOW_ORIGIN,
+                HeaderValue::from_static("*"),
+            ),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-cache")),
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static(mime_of(&canon_file)),
+            ),
+        ],
+        data,
+    )
+        .into_response()
+}
+
+fn plugin_error(status: StatusCode, message: &'static str) -> Response {
+    (
+        [(
+            header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            HeaderValue::from_static("*"),
+        )],
+        (status, message),
+    )
+        .into_response()
+}
+
+fn valid_plugin_id_segment(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+}
+
+fn mime_of(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "json" | "map" => "application/json; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "html" => "text/html; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "ico" => "image/x-icon",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "ttf" => "font/ttf",
+        "wasm" => "application/wasm",
+        _ => "application/octet-stream",
+    }
 }
 
 async fn ws_upgrade(ws: WebSocketUpgrade, State(state): State<SharedState>) -> Response {
@@ -363,6 +483,17 @@ impl Session {
             },
             ClientMsg::RemoveDashboard { id } => match svc.remove_dashboard(&id).await {
                 Ok(dashboards) => Ok(Some(ServerMsg::Dashboards { dashboards })),
+                Err(e) => Ok(Some(ServerMsg::Error { message: e })),
+            },
+            ClientMsg::GetUiPlugins => Ok(Some(ServerMsg::UiPlugins {
+                plugins: svc.ui_plugins().await,
+            })),
+            ClientMsg::ImportUiPlugin { path } => match svc.import_ui_plugin(&path).await {
+                Ok(plugins) => Ok(Some(ServerMsg::UiPlugins { plugins })),
+                Err(e) => Ok(Some(ServerMsg::Error { message: e })),
+            },
+            ClientMsg::RemoveUiPlugin { id } => match svc.remove_ui_plugin(&id).await {
+                Ok(plugins) => Ok(Some(ServerMsg::UiPlugins { plugins })),
                 Err(e) => Ok(Some(ServerMsg::Error { message: e })),
             },
         }

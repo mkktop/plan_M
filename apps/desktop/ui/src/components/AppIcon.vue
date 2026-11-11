@@ -52,6 +52,13 @@ const PATHS: Record<string, string[]> = {
   layout: ['M3 3h18v18H3z', 'M3 9h18', 'M9 9v12'],
   package: ['M21 8 12 3 3 8v8l9 5 9-5V8Z', 'M3 8l9 5 9-5', 'M12 13v8'],
   folder: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z'],
+  plugin: [
+    'M9 3v4',
+    'M15 3v4',
+    'M7 7h10v4.5a5 5 0 0 1-10 0V7Z',
+    'M12 16.5V21',
+    'M9 21h6',
+  ],
 }
 
 const FILLED = new Set(['play', 'dots'])

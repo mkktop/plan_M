@@ -410,6 +410,8 @@ function describeServer(m: ServerMsg): string {
       return `packages · ${m.packages.length} 个设备包`
     case 'dashboards':
       return `dashboards · ${m.dashboards.length} 个布局`
+    case 'uiPlugins':
+      return `uiPlugins · ${m.plugins.length} 个插件`
     case 'commandOk':
       return `commandOk · ${m.kind}`
     case 'error':
@@ -453,6 +455,12 @@ function describeClient(m: ClientMsg): string {
       return `saveDashboard · ${m.dashboard.id} (${m.dashboard.widgets.length} 组件)`
     case 'removeDashboard':
       return `removeDashboard · ${m.id}`
+    case 'getUiPlugins':
+      return 'getUiPlugins'
+    case 'importUiPlugin':
+      return `importUiPlugin · ${m.path}`
+    case 'removeUiPlugin':
+      return `removeUiPlugin · ${m.id}`
     default:
       return 'unknown'
   }

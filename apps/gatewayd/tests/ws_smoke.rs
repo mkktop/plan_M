@@ -193,6 +193,45 @@ async fn ws_full_protocol_smoke() {
         }
     };
     assert!(left.is_empty(), "删除后应无仪表盘");
+
+    // 7. UI 插件：安装示例插件 → 列表应答 → 删除
+    let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/ui-plugins/meter-card")
+        .canonicalize()
+        .expect("示例插件目录应存在");
+    send(
+        &mut ws,
+        &ClientMsg::ImportUiPlugin {
+            path: example.to_string_lossy().into_owned(),
+        },
+    )
+    .await;
+    let plugins = loop {
+        if let ServerMsg::UiPlugins { plugins } = recv(&mut ws).await {
+            break plugins;
+        }
+    };
+    let plugin = plugins
+        .iter()
+        .find(|p| p.id == "com.example.meter-card")
+        .expect("示例插件应安装成功");
+    assert!(plugin.permissions.iter().any(|p| p == "tags:subscribe"));
+    assert!(plugin.widgets.iter().any(|w| w.id == "meter"));
+    assert_eq!(plugin.entry, "index.js");
+
+    send(
+        &mut ws,
+        &ClientMsg::RemoveUiPlugin {
+            id: "com.example.meter-card".into(),
+        },
+    )
+    .await;
+    let left = loop {
+        if let ServerMsg::UiPlugins { plugins } = recv(&mut ws).await {
+            break plugins;
+        }
+    };
+    assert!(left.is_empty(), "删除后应无 UI 插件");
 }
 
 #[tokio::test]

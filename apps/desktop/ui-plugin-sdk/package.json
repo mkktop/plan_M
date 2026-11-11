@@ -1,0 +1,7 @@
+{
+  "name": "@hmi/ui-plugin-sdk",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Type definitions for plan_M ESM UI plugins (SDK v1)",
+  "types": "index.d.ts"
+}

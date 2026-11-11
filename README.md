@@ -2,23 +2,27 @@
 
 可扩展、高自定义的工业上位机。核心思路：**声明式设备包 + 双进程架构 + 订阅制实时数据**。
 
-已交付「采集核心 + gatewayd」「Tauri 2 + Vue 3 桌面 UI」与「设备包导入 + 仪表盘」。
+已交付「采集核心 + gatewayd」「Tauri 2 + Vue 3 桌面 UI」「设备包导入 + 仪表盘」
+与「ESM UI 插件」。
 采集进程可独立常驻运行，桌面壳只是它的 WebSocket 客户端；UI 崩溃/关闭不影响采集。
 
 ## 架构
 
 ```
 ┌─ UI 进程（Tauri 2 + Vue 3，随时可崩可关）──────────────┐
-│    诊断 / 仪表盘 / 通道 / 设备 / 设备包 / 实时点表        │
+│    诊断 / 仪表盘 / 通道 / 设备 / 设备包 / 插件 / 实时点表 │
+│    + 插件贡献的导航页与仪表盘组件（ESM 动态加载）        │
 └──────────────┬──────────────────────────────────────┘
                │ WebSocket @127.0.0.1:59120（JSON 消息，token 鉴权）
+               │ HTTP /plugins/<id>/<entry>（插件 ESM 静态资源）
 ┌──────────────┴──────────────┐
 │ gatewayd 采集进程（常驻）     │
 │ ├─ 通道监督器 × N（串口）     │
 │ ├─ 轮询编译器（读块合并）     │
 │ ├─ TagHub 实时库（订阅分发）  │
 │ ├─ 设备包注册表（声明式）     │
-│ └─ axum：/health + /ws       │
+│ ├─ UI 插件注册表 + 静态服务   │
+│ └─ axum：/health + /ws + /plugins │
 └───┬─────────┬───────────────┘
  COM3      COM5     …（每条 485 总线一个通道，挂 N 个从站）
 ```
@@ -36,24 +40,27 @@
 crates/
 ├─ domain/            纯模型：Tag/Quality/Modbus 地址工程记法/字节序编解码/点表/配置/端口 trait
 ├─ driver-modbus-rtu/ Modbus RTU 驱动：帧编解码、串口传输、虚拟总线 + 内存从站（SimSlave）
-├─ packaging/         设备包：manifest/点表解析、语义校验、安装（目录/zip）、注册表
+├─ packaging/         设备包与 UI 插件：manifest/点表解析、语义校验、安装（目录/zip）、注册表
 ├─ gateway/           运行时：轮询编译器、通道监督器（串行事务/重试/离线/重连）、TagHub、服务编排、
-│                     仪表盘布局存储（dashboards.json）
+│                     仪表盘布局存储（dashboards.json）、UI 插件注册表
 └─ wire/              gatewayd ↔ UI 的 WS 消息契约（serde，两端共用）
 apps/
-├─ gatewayd/          CLI：serve / poll / scan / pkg
+├─ gatewayd/          CLI：serve / poll / scan / pkg；HTTP 静态服务 /plugins/<id>/<entry>
 └─ desktop/
    ├─ src-tauri/      Tauri 2 薄壳（gateway_info 读取 token、dialog 插件；不写业务逻辑）
-   └─ ui/             Vue 3 + TS + Vite + Pinia（WS 客户端 / 六个业务页）
+   ├─ ui/             Vue 3 + TS + Vite + Pinia（WS 客户端 / 七个业务页 / 插件宿主）
+   └─ ui-plugin-sdk/  插件作者用的 TypeScript 类型（SDK v1，无构建步骤）
 examples/packages/
 └─ pm3000/            示例设备包（三相电表，覆盖 u16/u32/i32/cdab/BCD/位展开/可写点/双轮询组）
+examples/ui-plugins/
+└─ meter-card/        示例 UI 插件（零依赖 ESM：仪表盘组件 + 导航页）
 ```
 
 ## 快速开始
 
 ```bash
 cargo build --workspace
-cargo test --workspace          # 89 个测试：编解码/帧/虚拟总线端到端/包校验/仪表盘存储/WS 协议
+cargo test --workspace          # 95 个测试：编解码/帧/虚拟总线端到端/包校验/插件安装/仪表盘存储/WS 协议
 
 # 1) 校验示例设备包
 gatewayd pkg validate examples/packages/pm3000
@@ -65,8 +72,9 @@ gatewayd poll --package examples/packages/pm3000 --com SIM --once
 gatewayd serve --sim
 #   → http://127.0.0.1:59120/health
 #   → ws://127.0.0.1:59120/ws           （token 见启动输出 / <data-dir>/gateway.token）
+#   → http://127.0.0.1:59120/plugins    （已安装 UI 插件清单；资源为 /plugins/<id>/<entry>）
 #   → 数据目录：%APPDATA%/gatewayd（--data-dir 可覆盖）
-#      config.json / gateway.token / packages/ / dashboards.json / logs/
+#      config.json / gateway.token / packages/ / ui-plugins/ / dashboards.json / logs/
 
 # 4) 桌面 UI（先保持 serve --sim 运行）
 cd apps/desktop
@@ -93,7 +101,7 @@ ws.send(JSON.stringify({type:'subscribe', tags:['pm1.uab','pm1.status.b0']}));
 // → {type:'changes', items:[{tag:'pm1.uab', value:{f64:220.1}, quality:'good', tsMs:...}]}
 ```
 
-## 桌面 UI（第二、三轮）
+## 桌面 UI（第二～四轮）
 
 Vue 3 + TypeScript + Vite + Pinia；Naive UI 只做表单控件，外壳/表格/弹窗为自绘，便于后续换肤与插件化。
 
@@ -107,6 +115,8 @@ Vue 3 + TypeScript + Vite + Pinia；Naive UI 只做表单控件，外壳/表格/
 - **设备包**：已安装包列表、点表预览（地址/类型/单位/换算/读写/位展开）、在用设备数；
   桌面版支持 **zip/目录拖放** 与文件对话框，浏览器调试模式用 gatewayd 本机路径；导入失败逐字段内联展示，
   成功后自动选中新包并可直接添加设备。
+- **插件**：已安装 ESM UI 插件列表（版本/权限/贡献点/加载状态）、zip/目录导入与移除；
+  插件贡献的导航页自动出现在侧栏，插件组件自动进入仪表盘「组件类型」下拉框。
 - **实时点表**：按设备查看点位；只订阅当前设备的 tag（bit 子 tag 一并订阅），值/单位/质量/更新时间，
   状态字位展开为芯片，`access=rw` 的点可写值（工程量，gatewayd 负责反算 scale/offset）。
 
@@ -162,28 +172,77 @@ Tauri 侧只加了一个 `tauri-plugin-dialog`（文件/目录选择）与 `gate
 - 实例覆盖：设备实例可用 `overrides` 单点改 `scale`/`offset`/`pollGroup`（同型号多台不复制点表）。
 - 编辑器支持：`crates/packaging/schema/*.schema.json` 可直接给 VS Code 做补全校验。
 
+## UI 插件（ESM）
+
+一个目录（或 zip）= `manifest.json` + 构建好的 ESM 入口（默认 `index.js`）+ 资源：
+
+```json
+// manifest.json
+{
+  "schemaVersion": 1,
+  "id": "com.example.meter-card",
+  "name": "示例插件 · 仪表卡片",
+  "version": "1.0.0",
+  "sdkVersion": 1,
+  "entry": "index.js",
+  "permissions": ["tags:subscribe", "notify"],
+  "widgets": [
+    { "id": "meter", "name": "仪表卡片", "defaultW": 3, "defaultH": 2 }
+  ],
+  "pages": [
+    { "id": "about", "title": "插件示例", "icon": "plugin" }
+  ]
+}
+```
+
+```js
+// index.js —— 零依赖、框架无关；返回的函数在卸载时调用
+export function mount(el, ctx, props) {
+  if (props.kind === 'page') { /* 渲染导航页 */ return () => {} }
+  const off = ctx.tags.subscribe([props.widget.tag], (changes) => { /* 画到 el 里 */ })
+  return () => off()
+}
+```
+
+要点：
+
+- **权限是能力门面**：`tags:subscribe` / `tags:write` / `notify` / `theme`，未声明的 ctx 调用直接拒绝；
+  未知权限在导入时被校验拒绝（挡住拼写错误）。v1 同 webview 执行，强沙箱留到后续。
+- **插件不自己开 WebSocket**：`ctx.tags.subscribe/read/write` 由宿主聚合、按 tag 引用计数去重、断线重连后重放。
+- **仪表盘组件** kind 为 `plugin:<插件id>:<组件id>`；布局只保存 kind/tag/config，
+  `config` 是插件私有 JSON（示例支持 `min/max/decimals`），宿主原样透传。
+- **导航页** 自动注册到侧栏（路由 `/plugin/<插件id>/<页面id>`）；插件删除后导航项与组件一起失效。
+- **资源服务**：gatewayd 的 `GET /plugins/<id>/<entry>`（CORS + `no-cache`）；安装落到
+  `<data-dir>/ui-plugins/<id>/`，目录为真相源，重启自动扫描。
+- **失败可退化**：入口加载失败或插件被删除时，仪表盘组件显示占位符，布局与其它组件不受影响。
+- 示例见 `examples/ui-plugins/meter-card`；类型定义见 `apps/desktop/ui-plugin-sdk/index.d.ts`。
+
 ## WS 协议（摘要，完整见 `crates/wire`）
 
 客户端 → 服务端：`hello{token}` / `getSnapshot` / `subscribe{tags}` / `unsubscribe` /
 `writeTag{tag,value}` / `scanChannel{channel,range}` / `getSerialPorts` / `getPackages` /
 `upsertChannel` / `removeChannel` / `addDevice` / `removeDevice` / `importPackage{path}` /
-`getDashboards` / `saveDashboard{dashboard}` / `removeDashboard{id}`
+`getDashboards` / `saveDashboard{dashboard}` / `removeDashboard{id}` /
+`getUiPlugins` / `importUiPlugin{path}` / `removeUiPlugin{id}`
 
 服务端 → 客户端：`welcome` / `snapshot` / `changes{items}`（10~20ms 合并批量）/
 `channelState` / `deviceState` / `scanProgress` / `scanDone` / `serialPorts` / `packages` /
-`dashboards` / `commandOk` / `error`
+`dashboards` / `uiPlugins` / `commandOk` / `error`
 
 仪表盘布局（`DashboardDto`）：`{ id, name, cols, widgets[] }`；widget 为
 `{ id, kind, title, tag, unit, config, layout{x,y,w,h} }`。`config` 由组件自行解释
-（内置 value=`decimals`、switch=`onLabel/offLabel`、gauge=`min/max`），未来插件 widget 同构扩展。
+（内置 value=`decimals`、switch=`onLabel/offLabel`、gauge=`min/max`，插件组件由插件解释）。
 gatewayd 保存时校验 id/边界/**组件不重叠**，布局属工程数据，UI 可重装。
 
-## 下一轮（UI 插件机制）
+UI 插件（`UiPluginDto`）：`{ id, name, version, sdkVersion, permissions[], entry, widgets[], pages[], devicePanels[] }`。
+`getUiPlugins/importUiPlugin/removeUiPlugin` 统一以 `uiPlugins` 返回完整列表；安装支持目录或 zip。
+
+## 下一轮：报警 + 历史
 
 完整计划、验收标准与交接说明见 **[docs/ROADMAP.md](docs/ROADMAP.md)**。概要：
 
-1. UI 插件 ESM 动态加载（gatewayd 静态服务 + `PluginCtx` 门面 + manifest 权限）
-2. 报警引擎 + 历史归档（SQLite WAL）
+1. 报警引擎（点级限值 + active/ack/cleared）与报警 UI
+2. 历史归档（SQLite WAL + 保留策略）与历史曲线
 3. rhai 脚本驱动（私有协议，沙箱内跑）+ 打包分发
 
 ## 已知边界（刻意不做）
@@ -194,4 +253,5 @@ gatewayd 保存时校验 id/边界/**组件不重叠**，布局属工程数据�
 - 仪表盘布局是「最后写入者胜」，多人同时编辑同一看板不做冲突合并
 - 历史/报警未落库（SQLite 已留好位置）
 - `scanChannel` 在 WS 会话内同步执行（几十秒级；扫描期间该连接的其他请求会排队）
-- Tauri `csp` 暂为 null（插件机制落地时再收紧）
+- UI 插件 v1 与宿主同 webview：manifest 权限是能力门面而非强沙箱；`devicePanels` 贡献点已解析但不渲染
+- Tauri CSP 已启用（放行 `127.0.0.1:59120` 的脚本/连接/图片；dev 模式另放行 1420）

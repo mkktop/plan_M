@@ -1,20 +1,20 @@
 # 路线图与交接文档（Roadmap / Handoff）
 
 > 本文件用于跨会话交接：新会话从这里恢复上下文即可继续开发。
-> 最后更新：2026-11-11（第三轮完成时）。
+> 最后更新：2026-11-11（第四轮完成时）。
 
 ## 0. 一句话背景
 
 可扩展、高自定义的上位机：**Tauri 2 + Rust 双进程**架构。`gatewayd` 是常驻采集进程
-（串口/轮询/实时库/设备包/WS 服务），桌面 UI 是它的一个 WebSocket 客户端。
-设备能力通过**声明式设备包**扩展（导入即增加设备），UI 能力将通过 **ESM UI 插件**扩展。
+（串口/轮询/实时库/设备包/UI 插件/WS 服务），桌面 UI 是它的一个 WebSocket 客户端。
+设备能力通过**声明式设备包**扩展（导入即增加设备），UI 能力通过 **ESM UI 插件**扩展。
 
-## 1. 当前状态（第一～三轮已完成）
+## 1. 当前状态（第一～四轮已完成）
 
 - Rust 1.99.1（MSVC）已装；Node 24 + pnpm 11 + WebView2 + Tauri CLI 2.12.4 就绪。
 - Workspace：`crates/domain`、`crates/driver-modbus-rtu`、`crates/packaging`、
   `crates/gateway`、`crates/wire`、`apps/gatewayd`、`apps/desktop/src-tauri`。
-- 后端 **89 个测试全绿**；clippy 0 警告；fmt 通过；`vue-tsc` + `vite build` 通过。
+- 后端 **95 个测试全绿**；clippy 0 警告；fmt 通过；`vue-tsc` + `vite build` 通过。
 - 实机验收通过：`pkg validate` / `poll --com SIM` / `serve --sim` + `/health` +
   独立 WebSocket 客户端全协议；桌面 UI（浏览器模式）走完 诊断→通道→设备→实时点表→写值→
   扫描→添加/删除设备→断线重连全流程。
@@ -26,6 +26,21 @@
   仪表盘（12 列网格、数值卡/开关/仪表、拖动缩放、防抖自动保存、gatewayd `dashboards.json` 持久化）。
   验收走通：导入坏包看逐字段错误 → 导入新包 → 添加设备 → 建看板 → 三种组件 → 开关写值回读 →
   拖动/缩放 → 刷新页面与重启 gatewayd 后布局仍在。
+- **第四轮已交付**：ESM UI 插件机制。
+  - 后端：`crates/packaging/src/ui_plugin.rs`（manifest/权限/entry/贡献点校验、目录/zip 安装、
+    目录扫描注册表，5 个单测）；`GatewayService` 插件列表/导入/移除/真实目录查询；
+    gatewayd `GET /plugins` + `GET /plugins/<id>/<entry>`（CORS、no-cache、路径越界防护）。
+  - wire：`UiPluginDto` + `getUiPlugins/importUiPlugin/removeUiPlugin` + `uiPlugins` 应答；ws_smoke 覆盖安装/删除。
+  - 前端：`plugins/host.ts`（动态 import、权限门面、插件 tag 聚合、ctx 生命周期）、
+    `PluginsPage`（列表/导入/拖放/错误内联/移除）、`PluginPage` + 侧栏动态导航、
+    仪表盘插件组件渲染（`plugin:<插件id>:<组件id>`）与插件 config JSON 编辑。
+  - 示例：`examples/ui-plugins/meter-card`（零依赖 ESM，组件 + 导航页）；SDK 类型
+    `apps/desktop/ui-plugin-sdk/index.d.ts`。
+  - Tauri：启用生产/开发 CSP，放行 `127.0.0.1:59120` 的插件脚本、连接与图片。
+  - 验收实测：插件页导入示例 → 入口已加载、导航页出现 → 仪表盘选插件组件绑定 `pm1.uab` →
+    渲染 220.1V/GOOD/量程 180–260 → 布局落 `dashboards.json` → 刷新页面与重启 gatewayd 后仍在 →
+    移除插件后组件退化为占位符、导航项消失 → 重新导入恢复；坏插件导入显示逐字段错误；
+    Tauri 窗口内（WebView2 + CSP）插件资源成功加载并渲染 220.1V。
 
 ### 常用命令
 
@@ -43,14 +58,16 @@ pnpm tauri dev                                    # Tauri 窗口（token 自动�
 pnpm --dir ui dev                                 # 浏览器调试：?token=<gateway.token>
 ```
 
-- UI 目录：`apps/desktop/ui/src/{api,stores,pages,components,styles}`；
-  `api/ws.ts` 是协议客户端单例，`api/bridge.ts` 是 WS→Pinia 唯一分发点。
-  页面：`DiagnosticsPage / DashboardPage / ChannelsPage / DevicesPage / PackagesPage / TagsPage`；
-  `styles/pages.css` 放设备包与仪表盘专用样式（基础设计系统仍为 `theme.css`）。
+- UI 目录：`apps/desktop/ui/src/{api,stores,pages,components,styles,plugins}`；
+  `api/ws.ts` 是协议客户端单例，`api/bridge.ts` 是 WS→Pinia 唯一分发点，
+  `plugins/host.ts` 是 ESM 插件宿主（动态 import + ctx）。
+  页面：`DiagnosticsPage / DashboardPage / ChannelsPage / DevicesPage / PackagesPage / PluginsPage /
+  PluginPage / TagsPage`；`styles/pages.css` 放设备包/仪表盘/插件页专用样式（基础设计系统仍为 `theme.css`）。
 
-- 服务地址：`http://127.0.0.1:59120/health`、`ws://127.0.0.1:59120/ws`
+- 服务地址：`http://127.0.0.1:59120/health`、`ws://127.0.0.1:59120/ws`、
+  插件清单 `http://127.0.0.1:59120/plugins`
 - 数据目录默认 `%APPDATA%/gatewayd`：`config.json`、`gateway.token`、`packages/`、
-  `dashboards.json`、`logs/`
+  `ui-plugins/`、`dashboards.json`、`logs/`
 - SIM 演示数据在 `apps/gatewayd/src/simnet.rs`（寄存器预置值，改这里可改演示现象）
 
 ### 已确定且不要推翻的设计决策
@@ -73,9 +90,9 @@ pnpm --dir ui dev                                 # 浏览器调试：?token=<ga
 - WS 消息：`crates/wire/src/lib.rs`（serde 判别字段 `type`，camelCase）。
   `ClientMsg`: hello/getSnapshot/subscribe/unsubscribe/writeTag/scanChannel/getSerialPorts/
   getPackages/upsertChannel/removeChannel/addDevice/removeDevice/importPackage/
-  getDashboards/saveDashboard/removeDashboard
+  getDashboards/saveDashboard/removeDashboard/getUiPlugins/importUiPlugin/removeUiPlugin
   `ServerMsg`: welcome/snapshot/changes/channelState/deviceState/scanProgress/scanDone/
-  serialPorts/packages/dashboards/commandOk/error
+  serialPorts/packages/dashboards/uiPlugins/commandOk/error
 - **Value 的 JSON 形状是外部标签枚举**：`{"f64":220.1}` / `{"i64":300}` / `{"bool":true}` /
   `{"str":"..."}`；`TagChange = {tag, value, quality, tsMs}`；quality 字符串
   `good|bad|uncertain|comm_lost`。
@@ -87,6 +104,19 @@ pnpm --dir ui dev                                 # 浏览器调试：?token=<ga
   `config` 为组件私有 JSON（value=`decimals`、switch=`onLabel/offLabel`、gauge=`min/max`），
   未来插件 widget 复用同一形状。保存时 gatewayd 校验：id 规则、边界、组件不重叠。
   `dashboards` 消息是 get/save/remove 的统一应答（返回完整列表）。
+- UI 插件 DTO：`UiPluginDto { id, name, version, description, author, sdkVersion, permissions[],
+  entry, widgets[], pages[], devicePanels[] }`；`uiPlugins` 是 get/import/remove 的统一应答。
+  manifest 校验：id/version/sdkVersion、entry 相对路径且存在、权限白名单
+  (`tags:subscribe|tags:write|notify|theme`)、贡献点 id 唯一/尺寸 1–12。
+  安装到 `<data-dir>/ui-plugins/<id>/`，目录为真相源；资源路由
+  `GET /plugins/<id>/<entry>`（CORS + no-cache + canonicalize 越界防护）。
+- 插件组件 kind：`plugin:<插件id>:<组件id>`；`WidgetDto.config` 原样透传，由插件解释。
+  插件导航页路由 `/plugin/<插件id>/<页面id>`，侧栏由 `pluginHost.pages` 动态生成。
+- 插件入口 `export function mount(el, ctx, props)`，返回清理函数；`props.kind` 为 `widget` 或
+  `page`。`ctx.tags.subscribe/read/write`、`ctx.notify`、`ctx.theme`、`ctx.log`；
+  权限未声明的调用抛错/拒绝。插件不自己开 WebSocket，宿主按 tag 聚合去重并重放订阅。
+- Tauri CSP：生产和开发都放行 `127.0.0.1:59120`（script/connect/img）；dev 额外放行
+  `localhost:1420` 与 HMR WebSocket。改 CSP 后必须用 `pnpm tauri dev` 实测插件能加载。
 - Tauri 命令 `gateway_info`：见 `apps/desktop/src-tauri/src/lib.rs`；
   文件/目录选择走 `tauri-plugin-dialog`（capability `dialog:default` + JS `@tauri-apps/plugin-dialog`）。
 - UI 连接默认值：`ws://127.0.0.1:59120/ws`；浏览器调试用 `?token=&ws=` 覆盖。
@@ -99,6 +129,8 @@ pnpm --dir ui dev                                 # 浏览器调试：?token=<ga
 - 无 TLS（本地回环 + token）；`scanChannel` 在 WS 会话内同步执行（几十秒级）；
 - 历史/报警未落库；配置是 JSON（SQLite 后路已留 `ConfigStore` trait）；
 - 仪表盘布局 last-write-wins（多人同时编辑不合并）；损坏的 `dashboards.json` 按空布局启动并告警；
+- UI 插件 v1 与宿主同 webview，权限是能力门面不是强沙箱；`devicePanels` 已解析但不渲染；
+  插件入口按 `version` 查询串缓存，改文件不升版本时需要刷新页面或重启 gatewayd；
 - 数据目录 `data/`（本地调试产物）已在 `.gitignore`。
 
 ## 2. 第二轮：Tauri 2 桌面壳 + Vue 3 基础 UI（已完成）
@@ -215,7 +247,38 @@ pnpm --dir ui dev                                 # 浏览器调试：?token=<ga
 3. 布局校验在保存时执行，加载旧版非法文件不自动迁移（只告警/由 UI 拖回合法位置）；
 4. 仪表盘组件为手写 SVG/CSS（未引入图表库），保持零额外依赖。
 
-## 4. 第四轮：UI 插件机制（ESM）
+## 4. 第四轮：UI 插件机制（ESM）（已完成）
+
+### 实施结果（2026-11-11）
+
+- **后端包层**：`crates/packaging/src/ui_plugin.rs`
+  - `UiPluginManifest`（schemaVersion/id/version/sdkVersion/entry/permissions/widgets/pages/devicePanels）；
+  - 校验：id 规则、semver、sdkVersion ≤ 1、entry 相对路径且文件存在（.js/.mjs）、权限白名单、
+    贡献点 id 唯一、默认尺寸 1–12；
+  - 安装：目录/zip → 临时目录 → 校验 → `<data-dir>/ui-plugins/<id>/`（同 id 覆盖）；
+  - 注册表：目录扫描，损坏插件记录 `broken` 不阻塞服务。5 个单测（目录/zip/非法 manifest/损坏/升级）。
+- **gateway/gatewayd**：`GatewayService::{ui_plugins, ui_plugin_dir, import_ui_plugin, remove_ui_plugin}`；
+  `GET /plugins`（JSON 清单）与 `GET /plugins/{id}/{*path}` 静态资源
+  （CORS、`no-cache`、canonicalize 越界防护、真实安装目录查找）。
+  WS 新增 `getUiPlugins/importUiPlugin/removeUiPlugin` → `uiPlugins` 应答；ws_smoke 覆盖安装/删除。
+- **前端宿主**：`ui/src/plugins/host.ts`
+  - 动态 `import()` gatewayd 的 ESM 入口（URL 带 `?v=<version>`）；
+  - `PluginContext`：`tags.subscribe/read/write`、`notify`、`theme`、`log`，权限未声明直接拒绝；
+  - 插件订阅聚合：所有插件共用一条 `gateway.onMessage` + 宿主引用计数订阅，重连自动重放；
+  - 注册表索引：`plugin:<id>:<widget>` → 组件、`/plugin/<id>/<page>` → 导航页；加载失败记录错误。
+- **UI 页面**：`PluginsPage`（列表/权限/贡献点/加载状态、zip/目录导入、拖放、错误内联、移除确认）、
+  `PluginPage`（动态页面宿主）、`App.vue` 侧栏动态导航、仪表盘插件组件渲染与 config JSON 编辑。
+  插件删除/加载失败时组件显示占位符、导航项消失，不崩溃。
+- **示例与 SDK**：`examples/ui-plugins/meter-card`（纯 ESM 零依赖：仪表卡片 + 导航页 + notify 演示）；
+  `apps/desktop/ui-plugin-sdk/index.d.ts`（PluginContext/manifest 类型）。
+- **Tauri CSP**：`csp`/`devCsp` 放行 `127.0.0.1:59120` 的脚本、连接、图片；dev 额外放行 Vite。
+  实测 WebView2 中插件资源加载成功并渲染实时值。
+- **验收实测**：导入示例（目录）→ 入口已加载/导航页出现 → 仪表盘选插件组件绑 `pm1.uab` →
+  220.1V/GOOD/量程 180–260 → 布局写入 `dashboards.json` → 刷新页面/重启 gatewayd 后仍在 →
+  移除插件 → 占位符且导航消失 → 重新导入恢复；坏插件导入显示权限与 entry 两条错误；
+  HTTP：`/plugins` 清单、资源 `text/javascript` + CORS、路径穿越 400、缺失资源 404。
+
+### 原始计划（留档）
 
 - **宿主**：gatewayd 静态服务 `GET /plugins/{id}/*`（axum 从 `<data-dir>/ui-plugins/` 读，
   带 CORS、版本查询串缓存失效）；Tauri CSP 放行 `http://127.0.0.1:59120`。
@@ -231,7 +294,16 @@ pnpm --dir ui dev                                 # 浏览器调试：?token=<ga
 - **示例插件**：`examples/ui-plugins/meter-card`（无框架纯 JS，证明框架无关）。
 - **验收**：装 meter-card → 仪表盘可选该 widget → 删除插件后画布显示占位不崩。
 
-## 5. 第五轮：报警 + 历史
+### 与原始计划的差异
+
+1. 安装入口用 **gatewayd 本机路径**（目录/zip）而不是浏览器上传文件；与设备包导入一致，
+   桌面端由 Tauri dialog 提供绝对路径。浏览器调试模式仍需手动填路径。
+2. SDK 放在 `apps/desktop/ui-plugin-sdk`（类型定义，未走 pnpm workspace 构建）；
+   `ctx.i18n`/`ctx.device`/`alarms.subscribe` 未实现（alarms 随第五轮；devicePanels 暂不渲染）。
+3. 插件入口 URL 只按 `version` 做缓存失效；开发期改了插件代码但不升版本时需刷新页面。
+4. 权限门面在宿主代码里强制执行，但插件与宿主同 webview，v1 不是强沙箱。
+
+## 5. 第五轮：报警 + 历史（下一轮）
 
 - **报警**：点级限值（设备包 `alarms` 默认 + 实例覆盖），状态机 active/ack/cleared；
   `ServerMsg::alarms` 推送 + 快照；UI 报警条/报警页/确认操作。
@@ -253,11 +325,16 @@ pnpm --dir ui dev                                 # 浏览器调试：?token=<ga
 
 1. 读本文件 + `README.md`，然后 `cargo test --workspace` 确认基线绿。
 2. 需要看 UI 效果时先跑 `cargo run -p hmi-gatewayd -- serve --sim`，用 Node/临时页面验证 WS。
-3. 第四轮从「UI 插件 ESM 动态加载」开始：先定 `manifest.json` 贡献点与 `PluginCtx`，
-   再让仪表盘用插件 widget 渲染（现有 `WidgetDto.config` 契约已为其准备）。
+3. 第五轮从「报警引擎」开始：先在 domain/设备包定义点级限值与状态机，再补 wire 快照/推送与
+   SQLite 历史表；UI 加报警条/报警页/历史曲线。订阅与质量戳语义沿用现有 TagHub。
+4. UI 插件改动先读 `ui/src/plugins/host.ts` 与 `examples/ui-plugins/meter-card`；
+   改 `PluginContext`/manifest 契约要同步 `apps/desktop/ui-plugin-sdk/index.d.ts` 与
+   `crates/packaging/src/ui_plugin.rs` 的校验。
    UI 改动先跑 `pnpm --dir ui build`（含 vue-tsc），再用浏览器（`?token=`）或 Tauri 窗口验收。
-4. 新增 wire 消息要同时改 `crates/wire`、gatewayd 的 `serve.rs`、`ui/src/api/types.ts`，
+5. 新增 wire 消息要同时改 `crates/wire`、gatewayd 的 `serve.rs`、`ui/src/api/types.ts`，
    并补 ws_smoke 断言。
-5. 保持 crate 边界：`domain/gateway/packaging` 不引入 tauri 依赖。
-6. 仪表盘布局改动涉及 `dashboards.json` 契约与保存时校验（`crates/gateway/src/dashboards.rs`）；
+6. 保持 crate 边界：`domain/gateway/packaging` 不引入 tauri 依赖。
+7. 仪表盘布局改动涉及 `dashboards.json` 契约与保存时校验（`crates/gateway/src/dashboards.rs`）；
    加字段要向后兼容（serde default），非法/重叠布局会被拒绝保存。
+8. 改 Tauri CSP 后必须实测插件加载（`pnpm tauri dev`）：动态 import 跨源需要
+   `script-src http://127.0.0.1:59120`，资源请求需要 CORS。

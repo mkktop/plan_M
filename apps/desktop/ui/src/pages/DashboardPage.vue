@@ -5,8 +5,10 @@ import AppIcon from '@/components/AppIcon.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import ModalShell from '@/components/ModalShell.vue'
 import PageHeader from '@/components/PageHeader.vue'
+import PluginWidget from '@/components/PluginWidget.vue'
 import QualityPill from '@/components/QualityPill.vue'
 import { gateway } from '@/api/ws'
+import { PLUGIN_KIND_PREFIX, pluginWidgetInfo, pluginWidgetOptions } from '@/plugins/host'
 import { useConnectionStore } from '@/stores/connection'
 import { useDashboardsStore } from '@/stores/dashboards'
 import { useProjectStore } from '@/stores/project'
@@ -338,11 +340,25 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 
 function minW(kind: string): number {
+  if (kind.startsWith(PLUGIN_KIND_PREFIX)) return 2
   return kind === 'gauge' ? 3 : 2
 }
 
 function minH(kind: string): number {
+  if (kind.startsWith(PLUGIN_KIND_PREFIX)) return 2
   return kind === 'gauge' ? 3 : 2
+}
+
+/** 新组件的初始尺寸：插件贡献点自带 defaultW/H，内置组件用最小尺寸。 */
+function defaultSize(kind: string): { w: number; h: number } {
+  const info = pluginWidgetInfo(kind)
+  if (info) {
+    return {
+      w: Math.max(2, Math.min(12, info.widget.defaultW)),
+      h: Math.max(2, Math.min(12, info.widget.defaultH)),
+    }
+  }
+  return { w: minW(kind), h: minH(kind) }
 }
 
 interface DragState {
@@ -439,13 +455,22 @@ const widgetForm = reactive({
   decimals: 1,
   onLabel: 'ON',
   offLabel: 'OFF',
+  configJson: '{}',
 })
 
-const kindOptions = [
+const BUILTIN_KIND_OPTIONS = [
   { label: '数值卡', value: 'value' },
   { label: '开关', value: 'switch' },
   { label: '仪表', value: 'gauge' },
 ]
+
+// 插件组件动态出现在类型下拉框；kind = plugin:<插件id>:<组件id>。
+const kindOptions = computed(() => [
+  ...BUILTIN_KIND_OPTIONS,
+  ...pluginWidgetOptions().map((o) => ({ label: o.label, value: o.kind })),
+])
+
+const isPluginKind = computed(() => widgetForm.kind.startsWith(PLUGIN_KIND_PREFIX))
 
 function openAddWidget(): void {
   editingWidgetId.value = null
@@ -459,6 +484,7 @@ function openAddWidget(): void {
     decimals: 1,
     onLabel: 'ON',
     offLabel: 'OFF',
+    configJson: '{}',
   })
   showWidgetModal.value = true
 }
@@ -474,6 +500,7 @@ function openWidgetSettings(w: WidgetDto): void {
   widgetForm.decimals = cfgNumber(w, 'decimals', 1)
   widgetForm.onLabel = cfgString(w, 'onLabel', 'ON')
   widgetForm.offLabel = cfgString(w, 'offLabel', 'OFF')
+  widgetForm.configJson = JSON.stringify(w.config ?? {}, null, 2)
   showWidgetModal.value = true
 }
 
@@ -489,6 +516,20 @@ function onTagPicked(tag: string): void {
 }
 
 function configOfForm(): Record<string, unknown> {
+  if (isPluginKind.value) {
+    const text = widgetForm.configJson.trim()
+    if (!text) return {}
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(text)
+    } catch (e) {
+      throw new Error(`插件配置不是合法 JSON：${errorMessage(e)}`)
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('插件配置必须是 JSON 对象')
+    }
+    return parsed as Record<string, unknown>
+  }
   if (widgetForm.kind === 'gauge') {
     return { min: widgetForm.min, max: widgetForm.max }
   }
@@ -503,6 +544,10 @@ function submitWidget(): void {
   if (!d) return
   if (!widgetForm.tag) {
     toast.error('请选择绑定的点')
+    return
+  }
+  if (isPluginKind.value && !pluginWidgetInfo(widgetForm.kind)) {
+    toast.error('该插件组件不可用，请先在「插件」页安装并加载插件')
     return
   }
   if (!widgetForm.title.trim()) {
@@ -521,6 +566,13 @@ function submitWidget(): void {
     toast.error('仪表量程需要 max 大于 min')
     return
   }
+  let config: Record<string, unknown>
+  try {
+    config = configOfForm()
+  } catch (e) {
+    toast.error(errorMessage(e))
+    return
+  }
   if (editingWidgetId.value) {
     const w = d.widgets.find((x) => x.id === editingWidgetId.value)
     if (w) {
@@ -528,7 +580,7 @@ function submitWidget(): void {
       w.title = widgetForm.title.trim()
       w.tag = widgetForm.tag
       w.unit = widgetForm.unit
-      w.config = configOfForm()
+      w.config = config
       const mw = minW(w.kind)
       const mh = minH(w.kind)
       if (w.layout.w < mw) w.layout.w = Math.min(mw, d.cols - w.layout.x)
@@ -539,16 +591,15 @@ function submitWidget(): void {
       }
     }
   } else {
-    const w = minW(widgetForm.kind)
-    const h = minH(widgetForm.kind)
-    const slot = findSlot(d, w, h)
+    const size = defaultSize(widgetForm.kind)
+    const slot = findSlot(d, size.w, size.h)
     d.widgets.push({
       id: `w-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
       kind: widgetForm.kind,
       title: widgetForm.title.trim(),
       tag: widgetForm.tag,
       unit: widgetForm.unit,
-      config: configOfForm(),
+      config,
       layout: slot,
     })
   }
@@ -716,10 +767,17 @@ function removeWidget(w: WidgetDto): void {
             </div>
           </template>
 
-          <!-- 未知类型：未来插件 widget 未加载时的占位 -->
+          <!-- 插件组件：宿主动态 import 插件 ESM，渲染完全交给插件 -->
+          <PluginWidget
+            v-else-if="pluginWidgetInfo(w.kind)"
+            :widget="w"
+            :editing="editing"
+          />
+
+          <!-- 未知类型 / 插件未安装：保留占位，布局与数据不丢 -->
           <div v-else class="widget-unknown">
             <AppIcon name="dots" :size="18" />
-            <span>未知组件类型 <code>{{ w.kind }}</code></span>
+            <span>未知或未安装的组件 <code>{{ w.kind }}</code></span>
           </div>
         </div>
 
@@ -806,6 +864,19 @@ function removeWidget(w: WidgetDto): void {
             <n-input v-model:value="widgetForm.offLabel" placeholder="OFF" />
           </div>
         </template>
+
+        <div v-if="isPluginKind" class="field span-2">
+          <label>插件配置（JSON，由插件解释）</label>
+          <n-input
+            v-model:value="widgetForm.configJson"
+            type="textarea"
+            :autosize="{ minRows: 4, maxRows: 8 }"
+            placeholder='例如 { "min": 0, "max": 100 }'
+          />
+          <p class="hint">
+            内置组件不使用该字段；插件字段会原样保存到布局里。
+          </p>
+        </div>
       </div>
 
       <div class="banner info mt-14">

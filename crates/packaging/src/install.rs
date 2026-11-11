@@ -126,7 +126,7 @@ pub fn install(
     result
 }
 
-fn unique_temp_dir(prefix: &str) -> PathBuf {
+pub(crate) fn unique_temp_dir(prefix: &str) -> PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
@@ -138,7 +138,7 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
 }
 
 /// 把源（目录或 zip）复制/解压到 dst。
-fn materialize(src: &Path, dst: &Path) -> Result<(), PackageError> {
+pub(crate) fn materialize(src: &Path, dst: &Path) -> Result<(), PackageError> {
     if src.is_dir() {
         fs::create_dir_all(dst)?;
         copy_dir_recursive(src, dst)?;
@@ -190,7 +190,7 @@ fn unzip(zip_path: &Path, dst: &Path) -> Result<(), PackageError> {
 }
 
 /// zip 常见"单层包裹"：优先取 work_dir 本身，否则找子目录里的 manifest.json。
-fn locate_pkg_dir(work_dir: &Path) -> Result<PathBuf, PackageError> {
+pub(crate) fn locate_pkg_dir(work_dir: &Path) -> Result<PathBuf, PackageError> {
     if work_dir.join("manifest.json").is_file() {
         return Ok(work_dir.to_path_buf());
     }
@@ -213,7 +213,7 @@ fn locate_pkg_dir(work_dir: &Path) -> Result<PathBuf, PackageError> {
     ))
 }
 
-fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+pub(crate) fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
         let entry = entry?;

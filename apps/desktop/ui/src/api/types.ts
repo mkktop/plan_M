@@ -108,6 +108,43 @@ export interface DashboardDto {
   widgets: WidgetDto[]
 }
 
+/** UI 插件贡献点：仪表盘组件。渲染 kind 为 `plugin:<插件id>:<组件id>`。 */
+export interface UiWidgetDto {
+  id: string
+  name: string
+  description: string
+  defaultW: number
+  defaultH: number
+}
+
+/** UI 插件贡献点：导航页。路由为 `/plugin/<插件id>/<页面id>`。 */
+export interface UiPageDto {
+  id: string
+  title: string
+  icon: string
+}
+
+/** 设备详情面板贡献点（v1 仅展示，不渲染）。 */
+export interface UiDevicePanelDto {
+  id: string
+  title: string
+}
+
+/** 已安装的 ESM UI 插件；入口通过 gatewayd 的 /plugins/<id>/<entry> 提供。 */
+export interface UiPluginDto {
+  id: string
+  name: string
+  version: string
+  description: string
+  author: string
+  sdkVersion: number
+  permissions: string[]
+  entry: string
+  widgets: UiWidgetDto[]
+  pages: UiPageDto[]
+  devicePanels: UiDevicePanelDto[]
+}
+
 export interface SnapshotData {
   channels: ChannelDto[]
   devices: DeviceDto[]
@@ -155,6 +192,9 @@ export type ClientMsg =
   | { type: 'getDashboards' }
   | { type: 'saveDashboard'; dashboard: DashboardDto }
   | { type: 'removeDashboard'; id: string }
+  | { type: 'getUiPlugins' }
+  | { type: 'importUiPlugin'; path: string }
+  | { type: 'removeUiPlugin'; id: string }
 
 export type ServerMsg =
   | { type: 'welcome'; hostVersion: string }
@@ -167,6 +207,7 @@ export type ServerMsg =
   | { type: 'serialPorts'; ports: SerialPortDto[] }
   | { type: 'packages'; packages: PackageDto[] }
   | { type: 'dashboards'; dashboards: DashboardDto[] }
+  | { type: 'uiPlugins'; plugins: UiPluginDto[] }
   | { type: 'commandOk'; kind: string }
   | { type: 'error'; message: string }
 

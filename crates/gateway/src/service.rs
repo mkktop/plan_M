@@ -12,8 +12,14 @@ use hmi_domain::codec::{encode_num, ByteOrder, DataType, Num};
 use hmi_domain::config::{DeviceConfig, ProjectConfig, SerialChannelConfig};
 use hmi_domain::driver::Driver;
 use hmi_domain::value::{Quality, TagChange, TagId, Value};
-use hmi_packaging::{install as install_package, PackageRegistry};
-use hmi_wire::{ChannelDto, DashboardDto, DeviceDto, PackageDto, PointDto, SnapshotData};
+use hmi_packaging::{
+    install as install_package, install_ui_plugin, InstalledUiPlugin, PackageRegistry,
+    UiPluginRegistry,
+};
+use hmi_wire::{
+    ChannelDto, DashboardDto, DeviceDto, PackageDto, PointDto, SnapshotData, UiDevicePanelDto,
+    UiPageDto, UiPluginDto, UiWidgetDto,
+};
 use semver::Version;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -27,6 +33,7 @@ pub struct GatewayService {
     pub data_dir: PathBuf,
     drivers: HashMap<String, Arc<dyn Driver>>,
     packages: RwLock<Arc<PackageRegistry>>,
+    ui_plugins: RwLock<UiPluginRegistry>,
     config: RwLock<ProjectConfig>,
     dashboards: RwLock<DashboardStore>,
     channels: RwLock<HashMap<String, ChannelHandle>>,
@@ -45,6 +52,7 @@ impl GatewayService {
     ) -> anyhow::Result<Arc<Self>> {
         let data_dir = data_dir.into();
         std::fs::create_dir_all(data_dir.join("packages"))?;
+        std::fs::create_dir_all(data_dir.join("ui-plugins"))?;
         std::fs::create_dir_all(data_dir.join("logs"))?;
 
         let store = Box::new(JsonConfigStore::new(data_dir.join("config.json")));
@@ -53,6 +61,10 @@ impl GatewayService {
         let registry = PackageRegistry::scan(&data_dir.join("packages"));
         for (path, why) in &registry.broken {
             tracing::warn!(pkg = %path.display(), reason = %why, "跳过损坏的设备包");
+        }
+        let ui_plugins = UiPluginRegistry::scan(&data_dir.join("ui-plugins"));
+        for (path, why) in &ui_plugins.broken {
+            tracing::warn!(plugin = %path.display(), reason = %why, "跳过损坏的 UI 插件");
         }
 
         let drivers: HashMap<String, Arc<dyn Driver>> = drivers
@@ -68,6 +80,7 @@ impl GatewayService {
             data_dir,
             drivers,
             packages: RwLock::new(Arc::new(registry)),
+            ui_plugins: RwLock::new(ui_plugins),
             config: RwLock::new(config),
             dashboards: RwLock::new(dashboards),
             channels: RwLock::new(HashMap::new()),
@@ -388,6 +401,65 @@ impl GatewayService {
         packages.list().iter().map(package_dto).collect()
     }
 
+    // —— UI 插件（ESM 资源由 gatewayd 静态服务，注册表目录为真相源）——
+
+    pub async fn ui_plugins(&self) -> Vec<UiPluginDto> {
+        self.ui_plugins
+            .read()
+            .await
+            .list()
+            .iter()
+            .map(ui_plugin_dto)
+            .collect()
+    }
+
+    /// 已安装插件的真实目录（目录名不一定等于插件 id：手动拷贝也可能被扫描到）。
+    pub async fn ui_plugin_dir(&self, id: &str) -> Option<PathBuf> {
+        self.ui_plugins.read().await.get(id).map(|p| p.dir.clone())
+    }
+
+    /// 安装/升级插件并返回最新列表。
+    pub async fn import_ui_plugin(&self, path: &str) -> Result<Vec<UiPluginDto>, String> {
+        install_ui_plugin(
+            std::path::Path::new(path),
+            &self.data_dir.join("ui-plugins"),
+        )
+        .map_err(|e| e.to_string())?;
+        self.reload_ui_plugins().await;
+        Ok(self.ui_plugins().await)
+    }
+
+    /// 删除插件目录并返回最新列表；不存在视为成功（幂等）。
+    pub async fn remove_ui_plugin(&self, id: &str) -> Result<Vec<UiPluginDto>, String> {
+        if id.is_empty()
+            || !id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        {
+            return Err(format!("插件 id 非法：{id}"));
+        }
+        let dir = {
+            let registry = self.ui_plugins.read().await;
+            registry
+                .get(id)
+                .map(|p| p.dir.clone())
+                .unwrap_or_else(|| self.data_dir.join("ui-plugins").join(id))
+        };
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).map_err(|e| format!("删除插件目录失败：{e}"))?;
+        }
+        self.reload_ui_plugins().await;
+        Ok(self.ui_plugins().await)
+    }
+
+    async fn reload_ui_plugins(&self) {
+        let registry = UiPluginRegistry::scan(&self.data_dir.join("ui-plugins"));
+        for (path, why) in &registry.broken {
+            tracing::warn!(plugin = %path.display(), reason = %why, "跳过损坏的 UI 插件");
+        }
+        *self.ui_plugins.write().await = registry;
+    }
+
     // —— 仪表盘（布局属工程数据，落 <data-dir>/dashboards.json）——
 
     pub async fn dashboards(&self) -> Vec<DashboardDto> {
@@ -486,6 +558,49 @@ fn package_dto(p: &hmi_packaging::InstalledPackage) -> PackageDto {
                         off: b.off.clone(),
                     })
                     .collect(),
+            })
+            .collect(),
+    }
+}
+
+/// 已安装 UI 插件 → UI DTO。
+fn ui_plugin_dto(p: &InstalledUiPlugin) -> UiPluginDto {
+    let m = &p.manifest;
+    UiPluginDto {
+        id: m.id.clone(),
+        name: m.name.clone(),
+        version: m.version.to_string(),
+        description: m.description.clone(),
+        author: m.author.clone(),
+        sdk_version: m.sdk_version,
+        permissions: m.permissions.clone(),
+        entry: m.entry.clone(),
+        widgets: m
+            .widgets
+            .iter()
+            .map(|w| UiWidgetDto {
+                id: w.id.clone(),
+                name: w.name.clone(),
+                description: w.description.clone(),
+                default_w: w.default_w,
+                default_h: w.default_h,
+            })
+            .collect(),
+        pages: m
+            .pages
+            .iter()
+            .map(|p| UiPageDto {
+                id: p.id.clone(),
+                title: p.title.clone(),
+                icon: p.icon.clone(),
+            })
+            .collect(),
+        device_panels: m
+            .device_panels
+            .iter()
+            .map(|p| UiDevicePanelDto {
+                id: p.id.clone(),
+                title: p.title.clone(),
             })
             .collect(),
     }

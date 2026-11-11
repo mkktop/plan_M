@@ -31,6 +31,16 @@ export const router = createRouter({
       meta: { title: '设备包' },
     },
     {
+      path: '/plugins',
+      component: () => import('@/pages/PluginsPage.vue'),
+      meta: { title: '插件' },
+    },
+    {
+      path: '/plugin/:pluginId/:pageId',
+      component: () => import('@/pages/PluginPage.vue'),
+      meta: { title: '插件页面' },
+    },
+    {
       path: '/tags',
       component: () => import('@/pages/TagsPage.vue'),
       meta: { title: '实时点表' },

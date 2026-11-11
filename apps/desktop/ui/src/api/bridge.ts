@@ -2,9 +2,11 @@
 
 import { gateway } from './ws'
 import { useProjectStore } from '@/stores/project'
+import { usePluginsStore } from '@/stores/plugins'
 import { useTagsStore } from '@/stores/tags'
 import { useConnectionStore } from '@/stores/connection'
 import { useToastStore } from '@/stores/toast'
+import { syncPlugins } from '@/plugins/host'
 
 let installed = false
 
@@ -13,6 +15,7 @@ export function installGatewayBridge(): void {
   installed = true
 
   const project = useProjectStore()
+  const plugins = usePluginsStore()
   const tags = useTagsStore()
   const conn = useConnectionStore()
   const toast = useToastStore()
@@ -24,6 +27,9 @@ export function installGatewayBridge(): void {
         // 重连/首连都拉一次全量：UI 可能在断线期间错过了配置变更。
         void project.refresh().catch((e) => {
           console.warn('拉取快照失败', e)
+        })
+        void plugins.refresh().catch((e) => {
+          console.warn('拉取 UI 插件失败', e)
         })
         break
       case 'snapshot':
@@ -41,6 +47,10 @@ export function installGatewayBridge(): void {
         break
       case 'packages':
         project.applyPackages(msg.packages)
+        break
+      case 'uiPlugins':
+        plugins.applyList(msg.plugins)
+        void syncPlugins(msg.plugins)
         break
       case 'error':
         // 握手阶段（未连接）的错误没有页面请求可 catch，这里兜底提示。
