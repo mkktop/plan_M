@@ -8,7 +8,10 @@
 //!
 //! 订阅制：UI 只订阅当前画面用到的 tag；`Changes` 为 10~20ms 合并后的增量批量。
 
-use hmi_domain::config::{DeviceConfig, SerialChannelConfig};
+use hmi_domain::addr::RegArea;
+use hmi_domain::codec::DataType;
+use hmi_domain::config::{DeviceConfig, Parity, SerialChannelConfig};
+use hmi_domain::points::Access;
 use hmi_domain::value::{TagChange, Value};
 use serde::{Deserialize, Serialize};
 
@@ -93,6 +96,11 @@ pub enum ServerMsg {
         state: String,
         detail: String,
     },
+    /// 设备上下线（与通道状态分开，UI 不必从 channelState 猜）
+    DeviceState {
+        device: String,
+        online: bool,
+    },
     /// 扫描进度
     ScanProgress {
         channel: String,
@@ -136,6 +144,15 @@ pub struct ChannelDto {
     pub port: String,
     /// running / recovering / faulted / stopped
     pub state: String,
+    /// 以下为完整串口参数，供配置页回填（编辑通道不必再猜端口设置）
+    pub hw_id: Option<String>,
+    pub baud_rate: u32,
+    pub data_bits: u8,
+    pub parity: Parity,
+    pub stop_bits: u8,
+    pub resp_timeout_ms: u32,
+    pub retries: u32,
+    pub inter_frame_gap_ms: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -157,7 +174,9 @@ pub struct PackageDto {
     pub vendor: String,
     pub version: String,
     pub driver: String,
-    /// 点位概要（id/name/unit），供 UI 做点表展示与 tag 名映射
+    #[serde(default)]
+    pub description: String,
+    /// 点位定义，供 UI 做点表展示、写值入口与 tag 名映射
     pub points: Vec<PointDto>,
 }
 
@@ -166,7 +185,30 @@ pub struct PackageDto {
 pub struct PointDto {
     pub id: String,
     pub name: String,
+    /// 工程记法地址（如 "40101" / "HR:100"）
+    pub register: String,
+    /// 数据区（位区点位写值走布尔线圈语义）
+    pub area: RegArea,
+    #[serde(rename = "type")]
+    pub data_type: DataType,
+    pub access: Access,
+    pub scale: Option<f64>,
+    pub offset: Option<f64>,
     pub unit: String,
+    /// 状态字位展开定义（位号升序；JSON 用数组，避免整数 map key 的反序列化坑）
+    #[serde(default)]
+    pub bits: Vec<BitDto>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BitDto {
+    pub bit: u8,
+    pub name: String,
+    /// 置位文案（缺省 "1"）
+    pub on: Option<String>,
+    /// 复位文案（缺省 "0"）
+    pub off: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -221,5 +263,58 @@ mod tests {
         };
         let j = serde_json::to_string(&m).unwrap();
         assert_eq!(j, r#"{"type":"hello","token":"abc"}"#);
+    }
+
+    /// 回归：点表 DTO 必须能由 UI 端反序列化（bits 若用 u8-key map 会在此失败）。
+    #[test]
+    fn snapshot_with_bit_points_roundtrip() {
+        let snap = SnapshotData {
+            channels: vec![ChannelDto {
+                id: "ch1".into(),
+                name: "总线".into(),
+                port: "COM3".into(),
+                state: "running".into(),
+                hw_id: None,
+                baud_rate: 9600,
+                data_bits: 8,
+                parity: Parity::None,
+                stop_bits: 1,
+                resp_timeout_ms: 200,
+                retries: 2,
+                inter_frame_gap_ms: 5,
+            }],
+            devices: vec![],
+            packages: vec![PackageDto {
+                id: "com.acme.pm3000".into(),
+                name: "PM3000".into(),
+                vendor: "ACME".into(),
+                version: "1.2.0".into(),
+                driver: "modbus-rtu".into(),
+                description: String::new(),
+                points: vec![PointDto {
+                    id: "status".into(),
+                    name: "状态字".into(),
+                    register: "40300".into(),
+                    area: RegArea::Holding,
+                    data_type: DataType::U16,
+                    access: Access::R,
+                    scale: None,
+                    offset: None,
+                    unit: String::new(),
+                    bits: vec![BitDto {
+                        bit: 0,
+                        name: "运行".into(),
+                        on: None,
+                        off: None,
+                    }],
+                }],
+            }],
+            tags: vec![],
+        };
+        let msg = ServerMsg::Snapshot(snap);
+        let j = serde_json::to_string(&msg).unwrap();
+        assert!(j.contains(r#""bits":[{"bit":0"#), "{j}");
+        let back: ServerMsg = serde_json::from_str(&j).unwrap();
+        assert_eq!(msg, back);
     }
 }

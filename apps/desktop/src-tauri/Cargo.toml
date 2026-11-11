@@ -1,0 +1,18 @@
+[package]
+name = "hmi-desktop"
+description = "上位机平台桌面壳（Tauri 2，thin client）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "hmi_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { workspace = true }
+dirs = { workspace = true }

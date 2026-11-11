@@ -7,7 +7,7 @@ use crate::store::{ConfigStore, JsonConfigStore};
 use crate::supervisor::{
     spawn_channel, BusOpener, ChannelHandle, ChannelRuntime, DeviceRuntime, GatewayEvent,
 };
-use hmi_domain::codec::{encode_num, ByteOrder, Num};
+use hmi_domain::codec::{encode_num, ByteOrder, DataType, Num};
 use hmi_domain::config::{DeviceConfig, ProjectConfig, SerialChannelConfig};
 use hmi_domain::driver::Driver;
 use hmi_domain::value::{Quality, TagChange, TagId, Value};
@@ -106,6 +106,14 @@ impl GatewayService {
                     .get(&c.id)
                     .map(|h| h.state())
                     .unwrap_or_else(|| "stopped".into()),
+                hw_id: c.hw_id.clone(),
+                baud_rate: c.baud_rate,
+                data_bits: c.data_bits,
+                parity: c.parity,
+                stop_bits: c.stop_bits,
+                resp_timeout_ms: c.resp_timeout_ms,
+                retries: c.retries,
+                inter_frame_gap_ms: c.inter_frame_gap_ms,
             })
             .collect();
 
@@ -122,27 +130,7 @@ impl GatewayService {
             })
             .collect();
 
-        let package_dtos = packages
-            .list()
-            .iter()
-            .map(|p| PackageDto {
-                id: p.manifest.id.clone(),
-                name: p.manifest.name.clone(),
-                vendor: p.manifest.vendor.clone(),
-                version: p.manifest.version.to_string(),
-                driver: p.manifest.protocol.driver.clone(),
-                points: p
-                    .points
-                    .points
-                    .iter()
-                    .map(|pt| PointDto {
-                        id: pt.id.clone(),
-                        name: pt.name.clone(),
-                        unit: pt.unit.clone(),
-                    })
-                    .collect(),
-            })
-            .collect();
+        let package_dtos = packages.list().iter().map(package_dto).collect();
 
         SnapshotData {
             channels: channel_dtos,
@@ -336,11 +324,8 @@ impl GatewayService {
                 .write_coil(driver, device.slave, point.register.offset, b)
                 .await
         } else {
-            let num = match &value {
-                Value::I64(v) => Num::I(*v),
-                Value::F64(v) => Num::F(*v),
-                _ => return Err("寄存器点需要数值".into()),
-            };
+            // 写入值是工程量：先按点的 scale/offset 反算原始寄存器值。
+            let num = engineering_to_num(point.data_type, point.scale, point.offset, &value)?;
             let bo: ByteOrder = point.byte_order.unwrap_or_default();
             let words =
                 encode_num(point.data_type, bo, num).map_err(|e| format!("编码写入值失败: {e}"))?;
@@ -391,48 +376,12 @@ impl GatewayService {
         let registry = PackageRegistry::scan(&self.data_dir.join("packages"));
         *self.packages.write().await = Arc::new(registry);
 
-        Ok(PackageDto {
-            id: installed.manifest.id,
-            name: installed.manifest.name,
-            vendor: installed.manifest.vendor,
-            version: installed.manifest.version.to_string(),
-            driver: installed.manifest.protocol.driver,
-            points: installed
-                .points
-                .points
-                .iter()
-                .map(|p| PointDto {
-                    id: p.id.clone(),
-                    name: p.name.clone(),
-                    unit: p.unit.clone(),
-                })
-                .collect(),
-        })
+        Ok(package_dto(&installed))
     }
 
     pub async fn packages(&self) -> Vec<PackageDto> {
         let packages = self.packages.read().await.clone();
-        packages
-            .list()
-            .iter()
-            .map(|p| PackageDto {
-                id: p.manifest.id.clone(),
-                name: p.manifest.name.clone(),
-                vendor: p.manifest.vendor.clone(),
-                version: p.manifest.version.to_string(),
-                driver: p.manifest.protocol.driver.clone(),
-                points: p
-                    .points
-                    .points
-                    .iter()
-                    .map(|pt| PointDto {
-                        id: pt.id.clone(),
-                        name: pt.name.clone(),
-                        unit: pt.unit.clone(),
-                    })
-                    .collect(),
-            })
-            .collect()
+        packages.list().iter().map(package_dto).collect()
     }
 
     /// 当前 tag 值（测试/CLI 用）。
@@ -453,6 +402,69 @@ impl GatewayService {
     }
 }
 
+/// 工程量 → 编码用的原始数值：`raw = (value - offset) / scale`。
+/// 整数/BCD 类型四舍五入后走整数路径（`encode_num` 只接受整数编码）。
+fn engineering_to_num(
+    dt: DataType,
+    scale: Option<f64>,
+    offset: Option<f64>,
+    value: &Value,
+) -> Result<Num, String> {
+    let eng = match value {
+        Value::I64(v) => *v as f64,
+        Value::F64(v) => *v,
+        _ => return Err("寄存器点需要数值".into()),
+    };
+    let s = scale.unwrap_or(1.0);
+    if s == 0.0 {
+        return Err("点表 scale 为 0，无法换算写入值".into());
+    }
+    let raw = (eng - offset.unwrap_or(0.0)) / s;
+    Ok(if matches!(dt, DataType::F32 | DataType::F64) {
+        Num::F(raw)
+    } else {
+        Num::I(raw.round() as i64)
+    })
+}
+
+/// 已安装包 → UI DTO（快照与包列表共用）。
+fn package_dto(p: &hmi_packaging::InstalledPackage) -> PackageDto {
+    PackageDto {
+        id: p.manifest.id.clone(),
+        name: p.manifest.name.clone(),
+        vendor: p.manifest.vendor.clone(),
+        version: p.manifest.version.to_string(),
+        driver: p.manifest.protocol.driver.clone(),
+        description: p.manifest.description.clone(),
+        points: p
+            .points
+            .points
+            .iter()
+            .map(|pt| PointDto {
+                id: pt.id.clone(),
+                name: pt.name.clone(),
+                register: pt.register.to_engineering(),
+                area: pt.register.area,
+                data_type: pt.data_type,
+                access: pt.access,
+                scale: pt.scale,
+                offset: pt.offset,
+                unit: pt.unit.clone(),
+                bits: pt
+                    .bits
+                    .iter()
+                    .map(|(bit, b)| hmi_wire::BitDto {
+                        bit: *bit,
+                        name: b.name.clone(),
+                        on: b.on.clone(),
+                        off: b.off.clone(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
 /// 从通道句柄表查设备在线状态（不碰 config 锁，避免与调用方持有的读锁互锁）。
 fn device_online_of(
     device_id: &str,
@@ -470,4 +482,30 @@ fn device_online_of(
                 .map(|f| f.load(std::sync::atomic::Ordering::Relaxed))
         })
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_value_applies_inverse_scale() {
+        // 2201 × 0.1 = 220.1；写 220.1 应还原成 2201
+        let n = engineering_to_num(DataType::U16, Some(0.1), None, &Value::F64(220.1)).unwrap();
+        assert_eq!(n, Num::I(2201));
+
+        // offset：raw = (eng - 10) / 2
+        let n = engineering_to_num(DataType::I32, Some(2.0), Some(10.0), &Value::I64(30)).unwrap();
+        assert_eq!(n, Num::I(10));
+
+        // 浮点类型保持小数
+        let n = engineering_to_num(DataType::F32, Some(0.1), None, &Value::F64(220.1)).unwrap();
+        match n {
+            Num::F(v) => assert!((v - 2201.0).abs() < 1e-9),
+            other => panic!("期望 F，得到 {other:?}"),
+        }
+
+        assert!(engineering_to_num(DataType::U16, Some(0.0), None, &Value::F64(1.0)).is_err());
+        assert!(engineering_to_num(DataType::U16, None, None, &Value::Bool(true)).is_err());
+    }
 }

@@ -1,0 +1,14 @@
+{
+  "name": "hmi-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "上位机平台桌面壳（Tauri 2）",
+  "scripts": {
+    "dev": "pnpm --filter @hmi/ui dev",
+    "build": "pnpm --filter @hmi/ui build",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4"
+  }
+}

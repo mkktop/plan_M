@@ -1,0 +1,144 @@
+//! gatewayd WS 契约的 TS 镜像（对应 crates/wire/src/lib.rs）。
+//! 只做类型声明；任何业务真值都以 gatewayd 为准。
+
+export type Quality = 'good' | 'bad' | 'uncertain' | 'comm_lost'
+
+export type TagValue =
+  | { f64: number }
+  | { i64: number }
+  | { bool: boolean }
+  | { str: string }
+
+export interface TagChange {
+  tag: string
+  value: TagValue
+  quality: Quality
+  tsMs: number
+}
+
+export type ChannelState = 'running' | 'recovering' | 'faulted' | 'stopped'
+export type Parity = 'none' | 'odd' | 'even'
+
+export interface ChannelDto {
+  id: string
+  name: string
+  port: string
+  state: string
+  hwId: string | null
+  baudRate: number
+  dataBits: number
+  parity: Parity
+  stopBits: number
+  respTimeoutMs: number
+  retries: number
+  interFrameGapMs: number
+}
+
+export interface DeviceDto {
+  id: string
+  name: string
+  channelId: string
+  package: string
+  slave: number
+  online: boolean
+}
+
+export type DataType = 'u16' | 'i16' | 'u32' | 'i32' | 'u64' | 'f32' | 'f64' | 'bcd16' | 'bcd32'
+export type RegArea = 'coil' | 'discrete' | 'input' | 'holding'
+export type Access = 'r' | 'rw'
+
+export interface BitDto {
+  bit: number
+  name: string
+  on: string | null
+  off: string | null
+}
+
+export interface PointDto {
+  id: string
+  name: string
+  register: string
+  area: RegArea
+  type: DataType
+  access: Access
+  scale: number | null
+  offset: number | null
+  unit: string
+  bits: BitDto[]
+}
+
+export interface PackageDto {
+  id: string
+  name: string
+  vendor: string
+  version: string
+  driver: string
+  description: string
+  points: PointDto[]
+}
+
+export interface SerialPortDto {
+  portName: string
+  hwId: string | null
+  description: string
+}
+
+export interface SnapshotData {
+  channels: ChannelDto[]
+  devices: DeviceDto[]
+  packages: PackageDto[]
+  tags: TagChange[]
+}
+
+export interface SerialChannelConfig {
+  id: string
+  name: string
+  port: string
+  hwId?: string | null
+  baudRate: number
+  dataBits: number
+  parity: Parity
+  stopBits: number
+  respTimeoutMs: number
+  retries: number
+  interFrameGapMs: number
+}
+
+export interface DeviceConfig {
+  id: string
+  name: string
+  channelId: string
+  package: string
+  slave: number
+  overrides?: Record<string, unknown>
+}
+
+export type ClientMsg =
+  | { type: 'hello'; token: string }
+  | { type: 'getSnapshot' }
+  | { type: 'subscribe'; tags: string[] }
+  | { type: 'unsubscribe'; tags: string[] }
+  | { type: 'writeTag'; tag: string; value: TagValue }
+  | { type: 'scanChannel'; channel: string; range?: [number, number] | null }
+  | { type: 'getSerialPorts' }
+  | { type: 'getPackages' }
+  | { type: 'upsertChannel'; config: SerialChannelConfig }
+  | { type: 'removeChannel'; channel: string }
+  | { type: 'addDevice'; config: DeviceConfig }
+  | { type: 'removeDevice'; device: string }
+  | { type: 'importPackage'; path: string }
+
+export type ServerMsg =
+  | { type: 'welcome'; hostVersion: string }
+  | ({ type: 'snapshot' } & SnapshotData)
+  | { type: 'changes'; items: TagChange[] }
+  | { type: 'channelState'; channel: string; state: string; detail: string }
+  | { type: 'deviceState'; device: string; online: boolean }
+  | { type: 'scanProgress'; channel: string; slave: number; found: boolean }
+  | { type: 'scanDone'; channel: string; found: number[] }
+  | { type: 'serialPorts'; ports: SerialPortDto[] }
+  | { type: 'packages'; packages: PackageDto[] }
+  | { type: 'commandOk'; kind: string }
+  | { type: 'error'; message: string }
+
+export type SnapshotMsg = Extract<ServerMsg, { type: 'snapshot' }>

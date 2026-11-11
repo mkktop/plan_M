@@ -1,7 +1,7 @@
 # 路线图与交接文档（Roadmap / Handoff）
 
 > 本文件用于跨会话交接：新会话从这里恢复上下文即可继续开发。
-> 最后更新：2026-11-11（第一轮完成时）。
+> 最后更新：2026-11-11（第二轮完成时）。
 
 ## 0. 一句话背景
 
@@ -9,15 +9,19 @@
 （串口/轮询/实时库/设备包/WS 服务），桌面 UI 是它的一个 WebSocket 客户端。
 设备能力通过**声明式设备包**扩展（导入即增加设备），UI 能力将通过 **ESM UI 插件**扩展。
 
-## 1. 当前状态（第一轮已完成并提交）
+## 1. 当前状态（第一、二轮已完成并提交）
 
-- Rust 1.99.1（MSVC）已装；Node 24 + pnpm 11 + WebView2 + npm 版 tauri CLI 2.11.2 就绪。
+- Rust 1.99.1（MSVC）已装；Node 24 + pnpm 11 + WebView2 + Tauri CLI 2.12.4 就绪。
 - Workspace：`crates/domain`、`crates/driver-modbus-rtu`、`crates/packaging`、
-  `crates/gateway`、`crates/wire`、`apps/gatewayd`。
-- **81 个测试全绿**；clippy 0 警告；fmt 通过。
+  `crates/gateway`、`crates/wire`、`apps/gatewayd`、`apps/desktop/src-tauri`。
+- 后端 **83 个测试全绿**；clippy 0 警告；fmt 通过；`vue-tsc` + `vite build` 通过。
 - 实机验收通过：`pkg validate` / `poll --com SIM` / `serve --sim` + `/health` +
-  独立 WebSocket 客户端全协议（hello→snapshot→subscribe→changes、错误 token 拒绝）。
+  独立 WebSocket 客户端全协议；桌面 UI（浏览器模式）走完 诊断→通道→设备→实时点表→写值→
+  扫描→添加/删除设备→断线重连全流程。
 - 示例设备包 `examples/packages/pm3000`（13 点，覆盖 u16/u32/i32/cdab/位展开/可写/双轮询组）。
+- **第二轮 UI 已交付**：`apps/desktop/ui`（Vue 3 + Vite + Pinia + Naive UI 表单）与
+  `apps/desktop/src-tauri`（Tauri 2 薄壳，`gateway_info` 读 token）。四个页面：
+  诊断 / 通道 / 设备 / 实时点表；订阅引用计数去重、指数退避重连、质量色、写值（工程量）。
 
 ### 常用命令
 
@@ -28,7 +32,15 @@ cargo run -p hmi-gatewayd -- serve --sim          # 演示模式（自动装示�
 cargo run -p hmi-gatewayd -- poll --package examples/packages/pm3000 --com SIM --once
 cargo run -p hmi-gatewayd -- scan --com COM3
 cargo run -p hmi-gatewayd -- pkg validate examples/packages/pm3000
+
+# 桌面 UI（先保持 serve --sim 运行）
+cd apps/desktop && pnpm install
+pnpm tauri dev                                    # Tauri 窗口（token 自动读 %APPDATA%/gatewayd）
+pnpm --dir ui dev                                 # 浏览器调试：?token=<gateway.token>
 ```
+
+- UI 目录：`apps/desktop/ui/src/{api,stores,pages,components,styles}`；
+  `api/ws.ts` 是协议客户端单例，`api/bridge.ts` 是 WS→Pinia 唯一分发点。
 
 - 服务地址：`http://127.0.0.1:59120/health`、`ws://127.0.0.1:59120/ws`
 - 数据目录默认 `%APPDATA%/gatewayd`：`config.json`、`gateway.token`、`packages/`、`logs/`
@@ -46,7 +58,8 @@ cargo run -p hmi-gatewayd -- pkg validate examples/packages/pm3000
 6. **设备包 = 声明式 JSON**（地址用设备手册工程记法如 `40101`；多字类型必须显式 byteOrder）。
    校验用 serde 强类型 + 语义规则（`crates/packaging/src/validate.rs`），另有 JSON Schema
    文件供编辑器补全（`crates/packaging/schema/`）。
-7. **前端框架已定**：Vue 3 + Vite + TypeScript + Pinia。
+7. **前端已定**：Vue 3 + Vite + TypeScript + Pinia + Naive UI（仅表单）；
+   外壳/表格/弹窗自绘。单例 WS 客户端 + 订阅引用计数，页面只读 Pinia。
 
 ### 关键契约速查
 
@@ -56,7 +69,13 @@ cargo run -p hmi-gatewayd -- pkg validate examples/packages/pm3000
   `ServerMsg`: welcome/snapshot/changes/channelState/scanProgress/scanDone/serialPorts/
   packages/commandOk/error
 - **Value 的 JSON 形状是外部标签枚举**：`{"f64":220.1}` / `{"i64":300}` / `{"bool":true}` /
-  `{"str":"..."}`；`TagChange = {tag, value, quality, tsMs}`。
+  `{"str":"..."}`；`TagChange = {tag, value, quality, tsMs}`；quality 字符串
+  `good|bad|uncertain|comm_lost`。
+- 快照 DTO 已含 UI 所需字段：`ChannelDto` 带完整串口参数；`PointDto` 带
+  `register/area/type/access/scale/offset/unit/bits[]`。设备上下线是独立的
+  `deviceState` 事件（不再复用 `channelState`）。
+- Tauri 命令 `gateway_info`：见 `apps/desktop/src-tauri/src/lib.rs`。
+- UI 连接默认值：`ws://127.0.0.1:59120/ws`；浏览器调试用 `?token=&ws=` 覆盖。
 - 设备包格式：`README.md` 的「设备包」一节 + `examples/packages/pm3000/`。
 - 轮询编译：`crates/gateway/src/poll.rs`（间隔≤4 合并、≤125 字/块）。
 - 通道监督器：`crates/gateway/src/supervisor.rs`；实时库：`crates/gateway/src/hub.rs`。
@@ -67,9 +86,27 @@ cargo run -p hmi-gatewayd -- pkg validate examples/packages/pm3000
 - 历史/报警未落库；配置是 JSON（SQLite 后路已留 `ConfigStore` trait）；
 - 数据目录 `data/demo`（本地调试产物）已在 `.gitignore`。
 
-## 2. 第二轮：Tauri 2 桌面壳 + Vue 3 基础 UI（下一轮，优先）
+## 2. 第二轮：Tauri 2 桌面壳 + Vue 3 基础 UI（已完成）
 
-### 目标与验收
+### 实施结果（2026-11-11）
+
+- 目录：`apps/desktop/{package.json,pnpm-workspace.yaml,src-tauri/,ui/}`；
+  pnpm workspace 管理 `@hmi/ui`，`pnpm tauri dev` 自动拉起 Vite（1420）。
+- Tauri 薄壳：`gateway_info` 命令读 `<data-dir>/gateway.token`（默认 `%APPDATA%/gatewayd`，
+  端口 59120），返回 `{wsUrl,token,tokenPath,dataDir,port,hostVersion}`；无业务逻辑。
+  窗口 1440×900（最小 1120×720）、深色标题栏；图标由 `app-icon.svg` 生成。
+- 前端：`api/ws.ts`（握手/重连/请求配对/订阅 refcount/日志环）、`api/bridge.ts`（消息→Pinia）、
+  stores `connection/project/tags/toast`；页面 诊断/通道/设备/实时点表；自绘卡片/表格/弹窗/Toast，
+  Naive UI 只用于表单控件。
+- 验收：`serve --sim` + 浏览器模式走通：连接→通道列表/串口枚举→扫描 1-3→从扫描结果预填添加设备→
+  写 setpoint 250→300 并回读→删除设备→kill/重启 gatewayd 自动重连并恢复订阅。
+- 与原始计划的差异：
+  1. UI 库选 **Naive UI**（表单控件）+ 自绘外壳，未用 Element Plus；
+  2. 设备包导入先做「gatewayd 本机路径」版本（zip 拖拽/dialog 留到第三轮）；
+  3. Tauri sidecar 自动拉起 gatewayd 未做（第六轮），开发期手动 `serve`；
+  4. `csp` 暂为 null（本地回环 + token；插件机制落地时再收紧）。
+
+### 目标与验收（原始计划，留档）
 
 `pnpm tauri dev` 启动桌面应用 → 自动/手动连上 `gatewayd serve --sim` →
 看到 2 台演示电表的实时点表（1s 刷新、质量色、可写点可写）、可管理通道/设备、可扫描串口。
@@ -109,6 +146,10 @@ cargo run -p hmi-gatewayd -- pkg validate examples/packages/pm3000
 - WS 地址/端口/token 要集中配置（不散落）；token 文件不存在时给出明确提示。
 - 前端不实现协议拼装逻辑之外的东西；所有业务真值以 gatewayd 为准。
 - 值格式化工具函数放 `ui/src/utils/format.ts`（f64 最多 6 位小数去尾零）。
+- **Volar/vue-tsc 已知坑**：模板静态属性值里出现字面量 `ws://…` 会破坏后续表达式的
+  ref 解包（报 `Property 'value' does not exist`）。静态 placeholder 用中文描述，
+  或把 URL 放脚本常量里绑定。
+- 点表窄屏：`theme.css` 有 1500/1180 两档断点；加列后先用 1280 宽检查是否裁切。
 
 ## 3. 第三轮：设备包导入 + 仪表盘
 
@@ -161,6 +202,7 @@ cargo run -p hmi-gatewayd -- pkg validate examples/packages/pm3000
 
 1. 读本文件 + `README.md`，然后 `cargo test --workspace` 确认基线绿。
 2. 需要看 UI 效果时先跑 `cargo run -p hmi-gatewayd -- serve --sim`，用 Node/临时页面验证 WS。
-3. 第二轮从「脚手架 + ws.ts + 诊断页」开始，先把连接链路打通再做业务页。
+3. 第三轮从「设备包 zip 拖拽导入 + 仪表盘」开始；UI 改动先跑 `pnpm --dir ui build`
+   （含 vue-tsc），再用浏览器（`?token=`）或 Tauri 窗口验收。
 4. 新增 wire 消息要同时改 `crates/wire` 与 gatewayd 的 `serve.rs`，并补 ws_smoke 断言。
 5. 保持 crate 边界：`domain/gateway/packaging` 不引入 tauri 依赖。

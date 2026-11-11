@@ -2,13 +2,14 @@
 
 可扩展、高自定义的工业上位机。核心思路：**声明式设备包 + 双进程架构 + 订阅制实时数据**。
 
-第一轮已交付「采集核心 + gatewayd」，无 UI 可独立运行与验收；桌面壳（Tauri + Vue 3）为下一轮。
+已交付「采集核心 + gatewayd」与「Tauri 2 + Vue 3 桌面 UI」。采集进程可独立常驻运行，
+桌面壳只是它的 WebSocket 客户端；UI 崩溃/关闭不影响采集。
 
 ## 架构
 
 ```
-┌─ UI 进程（下一轮：Tauri 2 + Vue 3，随时可崩可关）─────┐
-│    配置页 / 实时点表 / 仪表盘 / UI 插件                  │
+┌─ UI 进程（Tauri 2 + Vue 3，随时可崩可关）──────────────┐
+│    诊断 / 通道 / 设备 / 实时点表（插件与仪表盘待做）      │
 └──────────────┬──────────────────────────────────────┘
                │ WebSocket @127.0.0.1:59120（JSON 消息，token 鉴权）
 ┌──────────────┴──────────────┐
@@ -39,7 +40,10 @@ crates/
 ├─ gateway/           运行时：轮询编译器、通道监督器（串行事务/重试/离线/重连）、TagHub、服务编排
 └─ wire/              gatewayd ↔ UI 的 WS 消息契约（serde，两端共用）
 apps/
-└─ gatewayd/          CLI：serve / poll / scan / pkg
+├─ gatewayd/          CLI：serve / poll / scan / pkg
+└─ desktop/
+   ├─ src-tauri/      Tauri 2 薄壳（gateway_info 读取 token，不写业务逻辑）
+   └─ ui/             Vue 3 + TS + Vite + Pinia（WS 客户端 / 四个业务页）
 examples/packages/
 └─ pm3000/            示例设备包（三相电表，覆盖 u16/u32/i32/cdab/BCD/位展开/可写点/双轮询组）
 ```
@@ -48,7 +52,7 @@ examples/packages/
 
 ```bash
 cargo build --workspace
-cargo test --workspace          # 81 个测试：编解码/帧/虚拟总线端到端/包校验/WS 协议
+cargo test --workspace          # 83 个测试：编解码/帧/虚拟总线端到端/包校验/WS 协议
 
 # 1) 校验示例设备包
 gatewayd pkg validate examples/packages/pm3000
@@ -62,10 +66,21 @@ gatewayd serve --sim
 #   → ws://127.0.0.1:59120/ws           （token 见启动输出 / <data-dir>/gateway.token）
 #   → 数据目录：%APPDATA%/gatewayd（--data-dir 可覆盖）
 
-# 4) 真硬件
+# 4) 桌面 UI（先保持 serve --sim 运行）
+cd apps/desktop
+pnpm install                # 首次
+pnpm tauri dev              # 自动拉起 vite + Tauri 窗口
+
+# 浏览器调试模式（不启动 Tauri，另开终端）
+pnpm --dir ui dev           # http://localhost:1420/?token=<gateway.token 内容>
+
+# 5) 真硬件
 gatewayd scan --com COM3 --baud 9600            # 扫总线从站
 gatewayd poll --package examples/packages/pm3000 --com COM3 --slave 1
 ```
+
+Tauri 桌面壳会自动读取 `<data-dir>/gateway.token` 与默认端口 59120；浏览器调试模式用
+`?token=…&ws=ws://127.0.0.1:59120/ws` 覆盖。改连接设置会存 localStorage。
 
 `serve --sim` 期间任何 WS 客户端可用如下消息流验证（Node 一行即可）：
 
@@ -75,6 +90,21 @@ ws.send(JSON.stringify({type:'getSnapshot'}));
 ws.send(JSON.stringify({type:'subscribe', tags:['pm1.uab','pm1.status.b0']}));
 // → {type:'changes', items:[{tag:'pm1.uab', value:{f64:220.1}, quality:'good', tsMs:...}]}
 ```
+
+## 桌面 UI（第二轮）
+
+Vue 3 + TypeScript + Vite + Pinia；Naive UI 只做表单控件，外壳/表格/弹窗为自绘，便于后续换肤与插件化。
+
+- **诊断**：连接状态、WS 地址/token、`/health` 探测与延迟、运行统计、完整通信日志（收发帧摘要）。
+- **通道**：串口枚举（含硬件 ID）、通道卡片与运行状态、新建/编辑（波特率/校验/超时/重试/帧间隔）、
+  从站扫描（结果可直接跳转添加设备）。
+- **设备**：按通道分组、在线状态、设备包版本与点位数、添加/删除设备、按路径导入设备包。
+- **实时点表**：按设备查看点位；只订阅当前设备的 tag（bit 子 tag 一并订阅），值/单位/质量/更新时间，
+  状态字位展开为芯片，`access=rw` 的点可写值（工程量，gatewayd 负责反算 scale/offset）。
+
+基础设施：`ui/src/api/ws.ts` 单例客户端负责 hello/token 握手、指数退避重连、请求响应配对、
+**订阅引用计数去重**、重连后自动重放订阅；Pinia 分为 `connection/project/tags/toast`。
+质量色规范：good 绿、bad 黄、uncertain 蓝、comm_lost 灰（保留最后好值，UI 不显示假数据）。
 
 ## 设备包（声明式，导入即增加设备）
 
@@ -132,18 +162,20 @@ ws.send(JSON.stringify({type:'subscribe', tags:['pm1.uab','pm1.status.b0']}));
 服务端 → 客户端：`welcome` / `snapshot` / `changes{items}`（10~20ms 合并批量）/
 `channelState` / `scanProgress` / `scanDone` / `serialPorts` / `packages` / `commandOk` / `error`
 
-## 下一轮（UI 与插件）
+## 下一轮（设备包体验 + 仪表盘）
 
 完整计划、验收标准与交接说明见 **[docs/ROADMAP.md](docs/ROADMAP.md)**。概要：
 
-1. Tauri 2 壳（Vue 3 + Vite）：串口/通道/设备配置页、实时点表（订阅制，只看当前画面）
-2. 设备包导入界面（zip 拖拽 → 校验错误精确到字段）+ 内置仪表盘
+1. 设备包 zip 拖拽导入（Tauri 文件对话框 / 拖放）、校验错误定位到字段、包详情与点表预览
+2. 内置仪表盘：网格画布 + 数值卡/开关/仪表 widget，布局持久化到 gatewayd（`dashboards.json`）
 3. UI 插件机制（ESM 动态加载 + `PluginCtx` 门面：tags/alarms/i18n/theme）
 4. 报警引擎 + 历史归档（SQLite WAL）
 5. rhai 脚本驱动（私有协议，沙箱内跑）+ 打包分发
 
-## 已知边界（本轮刻意不做）
+## 已知边界（刻意不做）
 
 - 无 TLS（本地回环服务，token 鉴权已够用；跨机部署时再加）
+- Tauri 尚未自动拉起 gatewayd（sidecar 在后续轮次）；开发期先手动 `serve`
+- 设备包导入目前是「gatewayd 本机绝对路径」，zip 拖拽在第三轮
 - 历史/报警未落库（SQLite 已留好位置）
-- `scanChannel` 在 WS 会话内同步执行（几十秒级，UI 做进度条时再改异步）
+- `scanChannel` 在 WS 会话内同步执行（几十秒级；扫描期间该连接的其他请求会排队）

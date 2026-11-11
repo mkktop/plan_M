@@ -2,9 +2,12 @@
 /target
 **/*.rs.bk
 
-# Node (下一轮前端)
+# Node / 前端
 node_modules/
 dist/
+
+# Tauri 构建产物（图标之外的生成物）
+apps/desktop/src-tauri/gen/
 
 # IDE
 .idea/

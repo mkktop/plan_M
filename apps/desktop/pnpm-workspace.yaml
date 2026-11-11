@@ -1,0 +1,6 @@
+packages:
+  - ui
+
+# vite 依赖 esbuild 的安装脚本（pnpm 默认拦截）
+allowBuilds:
+  esbuild: true

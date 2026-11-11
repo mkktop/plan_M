@@ -115,12 +115,19 @@ pub fn build_router(state: SharedState) -> Router {
         .with_state(state)
 }
 
-async fn health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "status": "ok",
-        "name": "gatewayd",
-        "version": HOST_VERSION,
-    }))
+async fn health() -> impl axum::response::IntoResponse {
+    (
+        // UI 运行在 tauri:// 或 vite dev server 源上，探测 health 需要放行跨源。
+        [(
+            axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            axum::http::HeaderValue::from_static("*"),
+        )],
+        Json(serde_json::json!({
+            "status": "ok",
+            "name": "gatewayd",
+            "version": HOST_VERSION,
+        })),
+    )
 }
 
 async fn ws_upgrade(ws: WebSocketUpgrade, State(state): State<SharedState>) -> Response {
@@ -234,15 +241,7 @@ fn event_to_msg(ev: GatewayEvent) -> ServerMsg {
             state,
             detail,
         },
-        GatewayEvent::DeviceOnline { device, online } => ServerMsg::ChannelState {
-            channel: String::new(),
-            state: if online {
-                "deviceOnline".into()
-            } else {
-                "deviceOffline".into()
-            },
-            detail: device,
-        },
+        GatewayEvent::DeviceOnline { device, online } => ServerMsg::DeviceState { device, online },
     }
 }
 
