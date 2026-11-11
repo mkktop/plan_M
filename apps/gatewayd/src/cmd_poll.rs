@@ -92,7 +92,7 @@ pub async fn run(args: PollArgs) -> Result<()> {
                 Ok(data) => {
                     let batch = g.decode("dev", &data);
                     let mut sorted = batch;
-                    sorted.sort_by(|a, b| a.0.to_string().cmp(&b.0.to_string()));
+                    sorted.sort_by_key(|a| a.0.to_string());
                     for (tag, snap) in sorted {
                         println!(
                             "  {tag:<24} {:>14}  [{:<9}] {}",

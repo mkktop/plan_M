@@ -164,7 +164,7 @@ fn validate_points(t: &PointsTable, v: &mut ValidationIssues) {
 
     // 定义了但无人引用的组 → 提示
     for g in &group_defined {
-        if !referenced.contains(&g) {
+        if !referenced.contains(g) {
             v.warn(format!("轮询组 `{g}` 没有任何点引用"));
         }
     }

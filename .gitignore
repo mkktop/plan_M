@@ -15,6 +15,9 @@ dist/
 data/
 *.token
 
+# 本地规划/会话产物
+.zcode/
+
 # OS
 Thumbs.db
 .DS_Store

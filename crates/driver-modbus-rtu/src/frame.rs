@@ -144,7 +144,7 @@ pub fn parse_response(req: &[u8], resp: &[u8]) -> Result<RespBody, FrameError> {
     let body = &resp[2..resp.len() - 2];
 
     match fc {
-        0x01 | 0x02 | 0x03 | 0x04 => {
+        0x01..=0x04 => {
             if body.is_empty() {
                 return Err(FrameError::Length("缺字节计数".into()));
             }
@@ -157,7 +157,7 @@ pub fn parse_response(req: &[u8], resp: &[u8]) -> Result<RespBody, FrameError> {
                 )));
             }
             // 与请求的数量核对
-            let req_count = ((req[4] as usize) << 8 | req[5] as usize) as usize;
+            let req_count = (req[4] as usize) << 8 | req[5] as usize;
             if fc == 0x03 || fc == 0x04 {
                 if byte_count != req_count * 2 {
                     return Err(FrameError::Length(format!(
@@ -166,15 +166,15 @@ pub fn parse_response(req: &[u8], resp: &[u8]) -> Result<RespBody, FrameError> {
                     )));
                 }
                 Ok(RespBody::Words(
-                    data.chunks_exact(2)
+                    data.as_chunks::<2>().0.iter()
                         .map(|c| ((c[0] as u16) << 8) | c[1] as u16)
                         .collect(),
                 ))
             } else {
-                if byte_count != (req_count + 7) / 8 {
+                if byte_count != req_count.div_ceil(8) {
                     return Err(FrameError::Length(format!(
                         "期望 {req_count} 个位（{} 字节），实得 {byte_count} 字节",
-                        (req_count + 7) / 8
+                        req_count.div_ceil(8)
                     )));
                 }
                 let mut bits = Vec::with_capacity(req_count);
@@ -216,7 +216,7 @@ pub fn expected_resp_len(header: &[u8]) -> Option<usize> {
         5
     } else {
         match fc {
-            0x01 | 0x02 | 0x03 | 0x04 => 5 + header[2] as usize,
+            0x01..=0x04 => 5 + header[2] as usize,
             0x05 | 0x06 | 0x10 => 8,
             _ => return None,
         }
@@ -271,7 +271,7 @@ mod tests {
     #[test]
     fn parse_bad_crc() {
         let req = build_read_request(1, 0x03, 100, 2);
-        let mut resp = vec![0x01, 0x03, 0x04, 0x00, 0x64, 0x0A, 0xBC, 0x00, 0x00];
+        let resp = vec![0x01, 0x03, 0x04, 0x00, 0x64, 0x0A, 0xBC, 0x00, 0x00];
         assert!(matches!(
             parse_response(&req, &resp),
             Err(FrameError::BadCrc)

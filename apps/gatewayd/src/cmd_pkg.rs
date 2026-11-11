@@ -59,7 +59,7 @@ fn validate(path: &std::path::Path) -> Result<()> {
     }
 }
 
-async fn install(path: &std::path::PathBuf, data_dir: Option<std::path::PathBuf>) -> Result<()> {
+async fn install(path: &std::path::Path, data_dir: Option<std::path::PathBuf>) -> Result<()> {
     let root = data_dir
         .unwrap_or_else(crate::default_data_dir)
         .join("packages");

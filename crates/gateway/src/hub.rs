@@ -74,7 +74,7 @@ impl TagHub {
             // 满了就丢（慢消费者不该拖垮采集）；计数供诊断
             if entry.value().tx.try_send(hits).is_err() {
                 let n = self.dropped.fetch_add(1, Ordering::Relaxed);
-                if n % 1000 == 0 {
+                if n.is_multiple_of(1000) {
                     tracing::warn!(dropped_batches = n, "订阅者消费过慢，已丢弃变更批次");
                 }
             }

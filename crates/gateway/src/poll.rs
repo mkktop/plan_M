@@ -444,7 +444,7 @@ mod tests {
             payload: BlockPayload::Words(vec![2200, 0b0000_0100]),
         }];
         let batch = g.decode("dev1", &data);
-        let map: std::collections::HashMap<_, _> = batch.into_iter().map(|(k, v)| (k, v)).collect();
+        let map: std::collections::HashMap<_, _> = batch.into_iter().collect();
 
         let v = map.get(&TagId::new("dev1.v")).unwrap();
         assert_eq!(v.value, Value::F64(220.0));

@@ -234,7 +234,7 @@ async fn run_channel(
     let channel_id = rt.cfg.id.clone();
     let timeout = Duration::from_millis(rt.cfg.resp_timeout_ms as u64);
     let gap = Duration::from_millis(rt.cfg.inter_frame_gap_ms);
-    let retries = rt.cfg.retries as u32;
+    let retries = rt.cfg.retries;
     let probe_timeout = Duration::from_millis((rt.cfg.resp_timeout_ms as f64 * 0.75) as u64);
     let probe_interval = Duration::from_secs(5);
 

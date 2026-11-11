@@ -163,7 +163,7 @@ impl SimSlave {
         let count = ((req[4] as u16) << 8) | req[5] as u16;
 
         let resp: Vec<u8> = match fc {
-            0x01 | 0x02 | 0x03 | 0x04 => {
+            0x01..=0x04 => {
                 let area_words = fc == 0x03 || fc == 0x04;
                 if area_words {
                     let map = if fc == 0x03 {
@@ -186,7 +186,7 @@ impl SimSlave {
                     } else {
                         self.discrete.lock().unwrap()
                     };
-                    let n = (count as usize + 7) / 8;
+                    let n = (count as usize).div_ceil(8);
                     let mut bytes = vec![0u8; n];
                     for i in 0..count as usize {
                         let addr = start + i as u16;
