@@ -134,12 +134,13 @@ ws.send(JSON.stringify({type:'subscribe', tags:['pm1.uab','pm1.status.b0']}));
 
 ## 下一轮（UI 与插件）
 
+完整计划、验收标准与交接说明见 **[docs/ROADMAP.md](docs/ROADMAP.md)**。概要：
+
 1. Tauri 2 壳（Vue 3 + Vite）：串口/通道/设备配置页、实时点表（订阅制，只看当前画面）
-2. 设备包导入界面（zip 拖拽 → 校验错误精确到字段）
-3. 内置仪表盘（画布 + widget 网格）
-4. UI 插件机制（ESM 动态加载 + `PluginCtx` 门面：tags/alarms/i18n/theme）
-5. 报警引擎 + 历史归档（SQLite WAL）
-6. rhai 脚本驱动（私有协议，沙箱内跑）
+2. 设备包导入界面（zip 拖拽 → 校验错误精确到字段）+ 内置仪表盘
+3. UI 插件机制（ESM 动态加载 + `PluginCtx` 门面：tags/alarms/i18n/theme）
+4. 报警引擎 + 历史归档（SQLite WAL）
+5. rhai 脚本驱动（私有协议，沙箱内跑）+ 打包分发
 
 ## 已知边界（本轮刻意不做）
 
