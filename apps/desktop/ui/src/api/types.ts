@@ -83,6 +83,31 @@ export interface SerialPortDto {
   description: string
 }
 
+export interface WidgetLayout {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+/** 仪表盘组件：kind 决定渲染器，config 是组件专属参数（未来插件 widget 同构）。 */
+export interface WidgetDto {
+  id: string
+  kind: string
+  title: string
+  tag: string
+  unit: string
+  config: Record<string, unknown> | null
+  layout: WidgetLayout
+}
+
+export interface DashboardDto {
+  id: string
+  name: string
+  cols: number
+  widgets: WidgetDto[]
+}
+
 export interface SnapshotData {
   channels: ChannelDto[]
   devices: DeviceDto[]
@@ -127,6 +152,9 @@ export type ClientMsg =
   | { type: 'addDevice'; config: DeviceConfig }
   | { type: 'removeDevice'; device: string }
   | { type: 'importPackage'; path: string }
+  | { type: 'getDashboards' }
+  | { type: 'saveDashboard'; dashboard: DashboardDto }
+  | { type: 'removeDashboard'; id: string }
 
 export type ServerMsg =
   | { type: 'welcome'; hostVersion: string }
@@ -138,6 +166,7 @@ export type ServerMsg =
   | { type: 'scanDone'; channel: string; found: number[] }
   | { type: 'serialPorts'; ports: SerialPortDto[] }
   | { type: 'packages'; packages: PackageDto[] }
+  | { type: 'dashboards'; dashboards: DashboardDto[] }
   | { type: 'commandOk'; kind: string }
   | { type: 'error'; message: string }
 

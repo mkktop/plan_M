@@ -4,7 +4,7 @@
 //! WriteTag → CommandOk。
 
 use futures::{SinkExt, StreamExt};
-use hmi_wire::{ClientMsg, ServerMsg};
+use hmi_wire::{ClientMsg, DashboardDto, ServerMsg, WidgetDto, WidgetLayout};
 use tokio_tungstenite::tungstenite::Message;
 
 async fn start_server() -> (String, String) {
@@ -150,6 +150,49 @@ async fn ws_full_protocol_smoke() {
         }
     }
     assert!(got_error, "只读点写入应返回错误");
+
+    // 6. 仪表盘：保存 → 列表应答 → 删除
+    let dashboard = DashboardDto {
+        id: "main".into(),
+        name: "总览".into(),
+        cols: 12,
+        widgets: vec![WidgetDto {
+            id: "w1".into(),
+            kind: "value".into(),
+            title: "AB 线电压".into(),
+            tag: "pm1.uab".into(),
+            unit: "V".into(),
+            config: serde_json::json!({ "decimals": 1 }),
+            layout: WidgetLayout {
+                x: 0,
+                y: 0,
+                w: 3,
+                h: 2,
+            },
+        }],
+    };
+    send(
+        &mut ws,
+        &ClientMsg::SaveDashboard {
+            dashboard: dashboard.clone(),
+        },
+    )
+    .await;
+    let saved = loop {
+        if let ServerMsg::Dashboards { dashboards } = recv(&mut ws).await {
+            break dashboards;
+        }
+    };
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0], dashboard);
+
+    send(&mut ws, &ClientMsg::RemoveDashboard { id: "main".into() }).await;
+    let left = loop {
+        if let ServerMsg::Dashboards { dashboards } = recv(&mut ws).await {
+            break dashboards;
+        }
+    };
+    assert!(left.is_empty(), "删除后应无仪表盘");
 }
 
 #[tokio::test]

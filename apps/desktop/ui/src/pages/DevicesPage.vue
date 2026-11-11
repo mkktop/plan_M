@@ -31,10 +31,6 @@ const form = reactive({
   name: '',
 })
 
-const importOpen = ref(false)
-const importPath = ref('')
-const importing = ref(false)
-
 const channelOptions = computed(() =>
   project.channels.map((c) => ({ label: `${c.name || c.id}（${c.port}）`, value: c.id })),
 )
@@ -72,9 +68,12 @@ function autoFill(): void {
 
 watch([() => form.packageId, () => form.slave], autoFill)
 
-function openAdd(channelId?: string, slave?: number): void {
+function openAdd(channelId?: string, slave?: number, packageId?: string): void {
   form.channelId = channelId || project.channels[0]?.id || ''
-  form.packageId = project.packages[0]?.id || ''
+  form.packageId =
+    (packageId && project.packageById.has(packageId) ? packageId : '') ||
+    project.packages[0]?.id ||
+    ''
   form.slave = slave && slave > 0 ? slave : 1
   idTouched.value = false
   autoFill()
@@ -130,37 +129,18 @@ async function doDelete(): Promise<void> {
   }
 }
 
-async function doImport(): Promise<void> {
-  const path = importPath.value.trim()
-  if (!path) {
-    toast.error('请填写设备包目录或 zip 的绝对路径')
-    return
-  }
-  importing.value = true
-  try {
-    await project.importPackage(path)
-    toast.success('设备包已导入')
-    importOpen.value = false
-    importPath.value = ''
-  } catch (e) {
-    toast.error(errorMessage(e))
-  } finally {
-    importing.value = false
-  }
-}
-
 function gotoTags(d: DeviceDto): void {
   router.push({ path: '/tags', query: { device: d.id } })
 }
 
 // 从「扫描从站」跳转过来时自动打开添加对话框（快照可能已加载，也可能还在路上）。
-const prefill = ref<{ channel?: string; slave?: number } | null>(null)
+const prefill = ref<{ channel?: string; slave?: number; packageId?: string } | null>(null)
 
 function applyPrefill(): void {
   if (!project.loaded || !prefill.value) return
   const p = prefill.value
   prefill.value = null
-  openAdd(p.channel, p.slave)
+  openAdd(p.channel, p.slave, p.packageId)
 }
 
 watch(() => project.loaded, applyPrefill, { immediate: true })
@@ -172,6 +152,7 @@ onMounted(() => {
     prefill.value = {
       channel: typeof q.channel === 'string' ? q.channel : undefined,
       slave: Number(q.slave) || 1,
+      packageId: typeof q.package === 'string' ? q.package : undefined,
     }
     void router.replace({ query: {} })
   }
@@ -181,9 +162,9 @@ onMounted(() => {
 <template>
   <div class="page">
     <PageHeader title="设备" subtitle="设备 = 设备包 + 通道 + 从站地址；导入设备包即可支持新型号">
-      <n-button size="small" @click="importOpen = true">
-        <template #icon><AppIcon name="download" :size="15" /></template>
-        导入设备包
+      <n-button size="small" @click="router.push('/packages')">
+        <template #icon><AppIcon name="package" :size="15" /></template>
+        设备包管理
       </n-button>
       <n-button size="small" type="primary" :disabled="!project.channels.length || !project.packages.length" @click="openAdd()">
         <template #icon><AppIcon name="plus" :size="15" /></template>
@@ -204,7 +185,8 @@ onMounted(() => {
 
     <div v-if="!project.packages.length && project.loaded" class="banner info">
       <AppIcon name="alert" :size="16" />
-      <span>没有已安装的设备包。导入 <code>manifest.json + points.json</code> 的目录或 zip。</span>
+      <span>没有已安装的设备包。到「设备包」页导入 <code>manifest.json + points.json</code> 的目录或 zip。</span>
+      <n-button size="tiny" quaternary @click="router.push('/packages')">去导入</n-button>
     </div>
 
     <template v-if="project.devices.length">
@@ -317,21 +299,6 @@ onMounted(() => {
         <n-button size="small" type="primary" :loading="saving" :disabled="!project.channels.length || !project.packages.length" @click="save">
           添加
         </n-button>
-      </template>
-    </ModalShell>
-
-    <!-- 导入设备包 -->
-    <ModalShell v-if="importOpen" title="导入设备包" subtitle="目录或 zip：manifest.json + points.json，导入即注册新型号" :width="560" @close="importOpen = false">
-      <div class="field">
-        <label>设备包路径</label>
-        <n-input v-model:value="importPath" placeholder="D:\\packages\\acme_pm3000.zip" />
-        <p class="hint">
-          路径是 gatewayd 所在机器的绝对路径。校验失败会返回具体字段原因；成功后可立即在设备页选用。
-        </p>
-      </div>
-      <template #footer>
-        <n-button size="small" @click="importOpen = false">取消</n-button>
-        <n-button size="small" type="primary" :loading="importing" @click="doImport">导入</n-button>
       </template>
     </ModalShell>
 

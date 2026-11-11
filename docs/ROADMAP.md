@@ -1,7 +1,7 @@
 # 路线图与交接文档（Roadmap / Handoff）
 
 > 本文件用于跨会话交接：新会话从这里恢复上下文即可继续开发。
-> 最后更新：2026-11-11（第二轮完成时）。
+> 最后更新：2026-11-11（第三轮完成时）。
 
 ## 0. 一句话背景
 
@@ -9,12 +9,12 @@
 （串口/轮询/实时库/设备包/WS 服务），桌面 UI 是它的一个 WebSocket 客户端。
 设备能力通过**声明式设备包**扩展（导入即增加设备），UI 能力将通过 **ESM UI 插件**扩展。
 
-## 1. 当前状态（第一、二轮已完成并提交）
+## 1. 当前状态（第一～三轮已完成）
 
 - Rust 1.99.1（MSVC）已装；Node 24 + pnpm 11 + WebView2 + Tauri CLI 2.12.4 就绪。
 - Workspace：`crates/domain`、`crates/driver-modbus-rtu`、`crates/packaging`、
   `crates/gateway`、`crates/wire`、`apps/gatewayd`、`apps/desktop/src-tauri`。
-- 后端 **83 个测试全绿**；clippy 0 警告；fmt 通过；`vue-tsc` + `vite build` 通过。
+- 后端 **89 个测试全绿**；clippy 0 警告；fmt 通过；`vue-tsc` + `vite build` 通过。
 - 实机验收通过：`pkg validate` / `poll --com SIM` / `serve --sim` + `/health` +
   独立 WebSocket 客户端全协议；桌面 UI（浏览器模式）走完 诊断→通道→设备→实时点表→写值→
   扫描→添加/删除设备→断线重连全流程。
@@ -22,6 +22,10 @@
 - **第二轮 UI 已交付**：`apps/desktop/ui`（Vue 3 + Vite + Pinia + Naive UI 表单）与
   `apps/desktop/src-tauri`（Tauri 2 薄壳，`gateway_info` 读 token）。四个页面：
   诊断 / 通道 / 设备 / 实时点表；订阅引用计数去重、指数退避重连、质量色、写值（工程量）。
+- **第三轮已交付**：设备包页（点表预览 / zip 拖放与文件对话框 / 错误内联 / 包→添加设备预填）+
+  仪表盘（12 列网格、数值卡/开关/仪表、拖动缩放、防抖自动保存、gatewayd `dashboards.json` 持久化）。
+  验收走通：导入坏包看逐字段错误 → 导入新包 → 添加设备 → 建看板 → 三种组件 → 开关写值回读 →
+  拖动/缩放 → 刷新页面与重启 gatewayd 后布局仍在。
 
 ### 常用命令
 
@@ -41,9 +45,12 @@ pnpm --dir ui dev                                 # 浏览器调试：?token=<ga
 
 - UI 目录：`apps/desktop/ui/src/{api,stores,pages,components,styles}`；
   `api/ws.ts` 是协议客户端单例，`api/bridge.ts` 是 WS→Pinia 唯一分发点。
+  页面：`DiagnosticsPage / DashboardPage / ChannelsPage / DevicesPage / PackagesPage / TagsPage`；
+  `styles/pages.css` 放设备包与仪表盘专用样式（基础设计系统仍为 `theme.css`）。
 
 - 服务地址：`http://127.0.0.1:59120/health`、`ws://127.0.0.1:59120/ws`
-- 数据目录默认 `%APPDATA%/gatewayd`：`config.json`、`gateway.token`、`packages/`、`logs/`
+- 数据目录默认 `%APPDATA%/gatewayd`：`config.json`、`gateway.token`、`packages/`、
+  `dashboards.json`、`logs/`
 - SIM 演示数据在 `apps/gatewayd/src/simnet.rs`（寄存器预置值，改这里可改演示现象）
 
 ### 已确定且不要推翻的设计决策
@@ -65,16 +72,23 @@ pnpm --dir ui dev                                 # 浏览器调试：?token=<ga
 
 - WS 消息：`crates/wire/src/lib.rs`（serde 判别字段 `type`，camelCase）。
   `ClientMsg`: hello/getSnapshot/subscribe/unsubscribe/writeTag/scanChannel/getSerialPorts/
-  getPackages/upsertChannel/removeChannel/addDevice/removeDevice/importPackage
-  `ServerMsg`: welcome/snapshot/changes/channelState/scanProgress/scanDone/serialPorts/
-  packages/commandOk/error
+  getPackages/upsertChannel/removeChannel/addDevice/removeDevice/importPackage/
+  getDashboards/saveDashboard/removeDashboard
+  `ServerMsg`: welcome/snapshot/changes/channelState/deviceState/scanProgress/scanDone/
+  serialPorts/packages/dashboards/commandOk/error
 - **Value 的 JSON 形状是外部标签枚举**：`{"f64":220.1}` / `{"i64":300}` / `{"bool":true}` /
   `{"str":"..."}`；`TagChange = {tag, value, quality, tsMs}`；quality 字符串
   `good|bad|uncertain|comm_lost`。
 - 快照 DTO 已含 UI 所需字段：`ChannelDto` 带完整串口参数；`PointDto` 带
   `register/area/type/access/scale/offset/unit/bits[]`。设备上下线是独立的
   `deviceState` 事件（不再复用 `channelState`）。
-- Tauri 命令 `gateway_info`：见 `apps/desktop/src-tauri/src/lib.rs`。
+- 仪表盘 DTO：`DashboardDto { id, name, cols, widgets[] }`；
+  `WidgetDto { id, kind, title, tag, unit, config, layout{x,y,w,h} }`。
+  `config` 为组件私有 JSON（value=`decimals`、switch=`onLabel/offLabel`、gauge=`min/max`），
+  未来插件 widget 复用同一形状。保存时 gatewayd 校验：id 规则、边界、组件不重叠。
+  `dashboards` 消息是 get/save/remove 的统一应答（返回完整列表）。
+- Tauri 命令 `gateway_info`：见 `apps/desktop/src-tauri/src/lib.rs`；
+  文件/目录选择走 `tauri-plugin-dialog`（capability `dialog:default` + JS `@tauri-apps/plugin-dialog`）。
 - UI 连接默认值：`ws://127.0.0.1:59120/ws`；浏览器调试用 `?token=&ws=` 覆盖。
 - 设备包格式：`README.md` 的「设备包」一节 + `examples/packages/pm3000/`。
 - 轮询编译：`crates/gateway/src/poll.rs`（间隔≤4 合并、≤125 字/块）。
@@ -84,7 +98,8 @@ pnpm --dir ui dev                                 # 浏览器调试：?token=<ga
 
 - 无 TLS（本地回环 + token）；`scanChannel` 在 WS 会话内同步执行（几十秒级）；
 - 历史/报警未落库；配置是 JSON（SQLite 后路已留 `ConfigStore` trait）；
-- 数据目录 `data/demo`（本地调试产物）已在 `.gitignore`。
+- 仪表盘布局 last-write-wins（多人同时编辑不合并）；损坏的 `dashboards.json` 按空布局启动并告警；
+- 数据目录 `data/`（本地调试产物）已在 `.gitignore`。
 
 ## 2. 第二轮：Tauri 2 桌面壳 + Vue 3 基础 UI（已完成）
 
@@ -151,18 +166,54 @@ pnpm --dir ui dev                                 # 浏览器调试：?token=<ga
   或把 URL 放脚本常量里绑定。
 - 点表窄屏：`theme.css` 有 1500/1180 两档断点；加列后先用 1280 宽检查是否裁切。
 
-## 3. 第三轮：设备包导入 + 仪表盘
+## 3. 第三轮：设备包导入 + 仪表盘（已完成）
+
+### 实施结果（2026-11-11）
+
+- **设备包页**（`PackagesPage.vue`）：左列表 + 右详情；详情含厂商/版本/驱动/描述、
+  点位数与位展开数、可写点数、在用设备数，以及逐点点表（工程地址、类型、单位/换算、读写、位定义）。
+  - 导入器：桌面端 **Tauri 原生拖放**（`onDragDropEvent`）与 **zip/目录文件对话框**
+    （`tauri-plugin-dialog`）；浏览器调试模式保留绝对路径输入并明确提示。
+  - 错误内联展示：`ServerMsg::error` 原文（含 `manifest.json 解析失败（行/列）`、语义校验列表）
+    显示在弹窗内 `<pre>`，不再只弹一条 toast。
+  - 导入成功后按「新 id / 版本变化」选中新包；「用此包添加设备」跳到设备页并预填型号。
+- **仪表盘**（`DashboardPage.vue`）：12 列网格、行高 64px；内置 `value/switch/gauge` 三类组件。
+  - 编辑模式：拖动移动、右下角缩放、组件设置（类型/标题/绑定 tag/单位、value 小数位、
+    gauge 量程、switch 文案）；碰撞检测，**组件不允许重叠**。
+  - 数据：只订阅当前看板绑定的 tag；开关写值走 `writeTag` 并由订阅回读，只允许 `access=rw`
+    寄存器/线圈点（位子 tag 只读）。
+  - 持久化：改动 600ms 防抖保存，显式串行化请求避免并发覆盖；状态栏显示「保存中/已保存/保存失败」。
+  - 多看板：新建/切换/重命名/删除；布局真值在 gatewayd。
+- **后端**：`crates/gateway/src/dashboards.rs`（`DashboardStore`，tmp+rename 原子落盘、
+  损坏文件告警后空布局启动、id/边界/重叠校验，4 个单测）；`GatewayService` 暴露
+  `dashboards/save_dashboard/remove_dashboard`；`serve.rs` 处理 3 条新消息；
+  `ws_smoke` 增加「保存 → 列表应答 → 删除」断言。
+- **Tauri**：`tauri-plugin-dialog` + capability `dialog:default`；仍然只有 `gateway_info`
+  一个业务外命令，采集/布局真值全在 gatewayd。
+- **验收实测**：坏 zip → 行 1 列 3 解析错误内联；新包 `com.acme.pm3001` 导入 → 自动选中 →
+  带着型号添加 `pm3001-3`（SIM 从站 3 在线）→ 新建看板 → 数值卡 220.1V、开关
+  setpoint ON→OFF（写值回读）、仪表 50Hz（量程 45–65）→ 拖拽/缩放后 `dashboards.json`
+  记录新坐标 → 刷新页面与重启 gatewayd 后 3 个组件与实时值仍在；Tauri 窗口启动后
+  `netstat` 可见 `msedgewebview2` 到 59120 的 ESTABLISHED WS。
+
+### 原始计划（留档）
 
 - **设备包导入**：拖拽 zip → `importPackage{path}`（gatewayd 本机路径）。
-  Tauri 侧文件对话框拿到绝对路径；导入后展示校验错误（`ServerMsg::error` 需带可读原因，
-  必要时把 `PackageError` 序列化进 error 文案）。包列表页展示点表预览（名称/地址/单位）。
-- **CSV 点表导入**（可选加分）：Excel 手册点表 → CSV → 生成 points.json（前端做转换，
-  或 gatewanyd 加 `pkg import-csv` 命令）。
+  Tauri 侧文件对话框拿到绝对路径；导入后展示校验错误（`ServerMsg::error` 需带可读原因）。
+  包列表页展示点表预览（名称/地址/单位）。
+- **CSV 点表导入**（可选加分）：Excel 手册点表 → CSV → 生成 points.json。
 - **内置仪表盘**：网格画布 + 内置 widget（数值卡、开关按钮、简易仪表盘）。
-  - 布局持久化：新增 wire 消息 `getDashboards/saveDashboard`，gatewayd 存
+  - 布局持久化：wire 消息 `getDashboards/saveDashboard`，gatewayd 存
     `<data-dir>/dashboards.json`（UI 可重装，布局属于工程）。
-  - 组件契约按未来插件模型设计（`{ id, type, config }`），内置 widget 与未来第三方 widget 同构。
+  - 组件契约按未来插件模型设计（`{ id, kind, config }`），内置与未来第三方 widget 同构。
 - **验收**：导入新包（改个 id/点表）→ 添加设备 → 仪表盘拖 widget 绑点 → 重启 gatewayd/UI 后布局还在。
+
+### 与原始计划的差异
+
+1. **CSV 点表导入未做**（可选加分项，留在后续按真实手册样本再做）；
+2. 布局保存为 last-write-wins，未做多客户端并发合并；
+3. 布局校验在保存时执行，加载旧版非法文件不自动迁移（只告警/由 UI 拖回合法位置）；
+4. 仪表盘组件为手写 SVG/CSS（未引入图表库），保持零额外依赖。
 
 ## 4. 第四轮：UI 插件机制（ESM）
 
@@ -202,7 +253,11 @@ pnpm --dir ui dev                                 # 浏览器调试：?token=<ga
 
 1. 读本文件 + `README.md`，然后 `cargo test --workspace` 确认基线绿。
 2. 需要看 UI 效果时先跑 `cargo run -p hmi-gatewayd -- serve --sim`，用 Node/临时页面验证 WS。
-3. 第三轮从「设备包 zip 拖拽导入 + 仪表盘」开始；UI 改动先跑 `pnpm --dir ui build`
-   （含 vue-tsc），再用浏览器（`?token=`）或 Tauri 窗口验收。
-4. 新增 wire 消息要同时改 `crates/wire` 与 gatewayd 的 `serve.rs`，并补 ws_smoke 断言。
+3. 第四轮从「UI 插件 ESM 动态加载」开始：先定 `manifest.json` 贡献点与 `PluginCtx`，
+   再让仪表盘用插件 widget 渲染（现有 `WidgetDto.config` 契约已为其准备）。
+   UI 改动先跑 `pnpm --dir ui build`（含 vue-tsc），再用浏览器（`?token=`）或 Tauri 窗口验收。
+4. 新增 wire 消息要同时改 `crates/wire`、gatewayd 的 `serve.rs`、`ui/src/api/types.ts`，
+   并补 ws_smoke 断言。
 5. 保持 crate 边界：`domain/gateway/packaging` 不引入 tauri 依赖。
+6. 仪表盘布局改动涉及 `dashboards.json` 契约与保存时校验（`crates/gateway/src/dashboards.rs`）；
+   加字段要向后兼容（serde default），非法/重叠布局会被拒绝保存。

@@ -408,6 +408,8 @@ function describeServer(m: ServerMsg): string {
       return `serialPorts · ${m.ports.length} 个串口`
     case 'packages':
       return `packages · ${m.packages.length} 个设备包`
+    case 'dashboards':
+      return `dashboards · ${m.dashboards.length} 个布局`
     case 'commandOk':
       return `commandOk · ${m.kind}`
     case 'error':
@@ -445,6 +447,12 @@ function describeClient(m: ClientMsg): string {
       return 'getSerialPorts'
     case 'getPackages':
       return 'getPackages'
+    case 'getDashboards':
+      return 'getDashboards'
+    case 'saveDashboard':
+      return `saveDashboard · ${m.dashboard.id} (${m.dashboard.widgets.length} 组件)`
+    case 'removeDashboard':
+      return `removeDashboard · ${m.id}`
     default:
       return 'unknown'
   }

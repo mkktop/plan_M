@@ -1,6 +1,7 @@
 //! GatewayService：把配置存储、包注册表、驱动注册表、通道监督器、TagHub
 //! 编成一个可被 CLI/WS 层驱动的整体。
 
+use crate::dashboards::{dashboards_path, DashboardStore};
 use crate::hub::TagHub;
 use crate::poll::compile;
 use crate::store::{ConfigStore, JsonConfigStore};
@@ -12,7 +13,7 @@ use hmi_domain::config::{DeviceConfig, ProjectConfig, SerialChannelConfig};
 use hmi_domain::driver::Driver;
 use hmi_domain::value::{Quality, TagChange, TagId, Value};
 use hmi_packaging::{install as install_package, PackageRegistry};
-use hmi_wire::{ChannelDto, DeviceDto, PackageDto, PointDto, SnapshotData};
+use hmi_wire::{ChannelDto, DashboardDto, DeviceDto, PackageDto, PointDto, SnapshotData};
 use semver::Version;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -27,6 +28,7 @@ pub struct GatewayService {
     drivers: HashMap<String, Arc<dyn Driver>>,
     packages: RwLock<Arc<PackageRegistry>>,
     config: RwLock<ProjectConfig>,
+    dashboards: RwLock<DashboardStore>,
     channels: RwLock<HashMap<String, ChannelHandle>>,
     events: broadcast::Sender<GatewayEvent>,
     store: Box<dyn ConfigStore>,
@@ -47,6 +49,7 @@ impl GatewayService {
 
         let store = Box::new(JsonConfigStore::new(data_dir.join("config.json")));
         let config = store.load()?;
+        let dashboards = DashboardStore::load(dashboards_path(&data_dir));
         let registry = PackageRegistry::scan(&data_dir.join("packages"));
         for (path, why) in &registry.broken {
             tracing::warn!(pkg = %path.display(), reason = %why, "跳过损坏的设备包");
@@ -66,6 +69,7 @@ impl GatewayService {
             drivers,
             packages: RwLock::new(Arc::new(registry)),
             config: RwLock::new(config),
+            dashboards: RwLock::new(dashboards),
             channels: RwLock::new(HashMap::new()),
             events,
             store,
@@ -382,6 +386,28 @@ impl GatewayService {
     pub async fn packages(&self) -> Vec<PackageDto> {
         let packages = self.packages.read().await.clone();
         packages.list().iter().map(package_dto).collect()
+    }
+
+    // —— 仪表盘（布局属工程数据，落 <data-dir>/dashboards.json）——
+
+    pub async fn dashboards(&self) -> Vec<DashboardDto> {
+        self.dashboards.read().await.list()
+    }
+
+    /// 保存仪表盘，返回保存后的完整列表（UI 用它刷新）。
+    pub async fn save_dashboard(
+        &self,
+        dashboard: DashboardDto,
+    ) -> Result<Vec<DashboardDto>, String> {
+        let mut store = self.dashboards.write().await;
+        store.upsert(dashboard)?;
+        Ok(store.list())
+    }
+
+    pub async fn remove_dashboard(&self, id: &str) -> Result<Vec<DashboardDto>, String> {
+        let mut store = self.dashboards.write().await;
+        store.remove(id)?;
+        Ok(store.list())
     }
 
     /// 当前 tag 值（测试/CLI 用）。

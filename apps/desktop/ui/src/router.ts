@@ -11,6 +11,11 @@ export const router = createRouter({
       meta: { title: '诊断' },
     },
     {
+      path: '/dashboard',
+      component: () => import('@/pages/DashboardPage.vue'),
+      meta: { title: '仪表盘' },
+    },
+    {
       path: '/channels',
       component: () => import('@/pages/ChannelsPage.vue'),
       meta: { title: '通道' },
@@ -19,6 +24,11 @@ export const router = createRouter({
       path: '/devices',
       component: () => import('@/pages/DevicesPage.vue'),
       meta: { title: '设备' },
+    },
+    {
+      path: '/packages',
+      component: () => import('@/pages/PackagesPage.vue'),
+      meta: { title: '设备包' },
     },
     {
       path: '/tags',

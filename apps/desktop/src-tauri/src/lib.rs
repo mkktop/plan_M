@@ -53,6 +53,8 @@ fn default_gateway_dir() -> PathBuf {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 文件/目录选择：设备包 zip 或解包目录 → 把绝对路径交给 gatewayd 导入。
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![gateway_info])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

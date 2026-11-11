@@ -49,6 +49,9 @@ const PATHS: Record<string, string[]> = {
   power: ['M12 2v10', 'M18.4 6.6a9 9 0 1 1-12.8 0'],
   clock: ['M12 8v4l3 2', 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z'],
   dots: ['M5 12h.01', 'M12 12h.01', 'M19 12h.01'],
+  layout: ['M3 3h18v18H3z', 'M3 9h18', 'M9 9v12'],
+  package: ['M21 8 12 3 3 8v8l9 5 9-5V8Z', 'M3 8l9 5 9-5', 'M12 13v8'],
+  folder: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z'],
 }
 
 const FILLED = new Set(['play', 'dots'])

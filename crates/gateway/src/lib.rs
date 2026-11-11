@@ -9,6 +9,7 @@
 //! 本 crate 不依赖任何串口/驱动实现：总线打开由外部注入（[`supervisor::BusOpener`]），
 //! 驱动通过 domain 的 [`hmi_domain::driver::Driver`] 端口注入 —— gatewayd 负责接线。
 
+pub mod dashboards;
 pub mod hub;
 pub mod poll;
 pub mod service;

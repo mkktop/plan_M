@@ -66,9 +66,18 @@ pub enum ClientMsg {
     RemoveDevice {
         device: String,
     },
-    /// 导入设备包（gatewayd 本机路径）
+    /// 导入设备包（gatewayd 本机路径，目录或 zip）
     ImportPackage {
         path: String,
+    },
+    /// 仪表盘布局（工程数据，持久化在 gatewayd）
+    GetDashboards,
+    /// 新建/保存仪表盘（同 id 即更新）
+    SaveDashboard {
+        dashboard: DashboardDto,
+    },
+    RemoveDashboard {
+        id: String,
     },
 }
 
@@ -116,6 +125,10 @@ pub enum ServerMsg {
     },
     Packages {
         packages: Vec<PackageDto>,
+    },
+    /// 仪表盘列表（get/save/remove 的统一应答）
+    Dashboards {
+        dashboards: Vec<DashboardDto>,
     },
     /// 命令成功（kind 与请求对应，如 "writeTag"）
     CommandOk {
@@ -219,6 +232,54 @@ pub struct SerialPortDto {
     pub description: String,
 }
 
+// —— 仪表盘（工程布局，存 gatewayd；UI 可重装）——
+
+/// 一个仪表盘：12 列网格 + 若干 widget。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardDto {
+    pub id: String,
+    pub name: String,
+    /// 网格列数（默认 12）
+    #[serde(default = "default_dashboard_cols")]
+    pub cols: u32,
+    #[serde(default)]
+    pub widgets: Vec<WidgetDto>,
+}
+
+fn default_dashboard_cols() -> u32 {
+    12
+}
+
+/// 仪表盘组件。`kind` 是组件类型（内置 value/switch/gauge，未来插件 widget 同构）；
+/// `config` 为组件专属参数，宿主不解析（未来第三方 widget 可直接扩展）。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WidgetDto {
+    pub id: String,
+    pub kind: String,
+    #[serde(default)]
+    pub title: String,
+    /// 绑定的 tag：`<设备id>.<点id>`（位子 tag 形如 `dev.status.b0`）；空串 = 未绑定占位
+    #[serde(default)]
+    pub tag: String,
+    #[serde(default)]
+    pub unit: String,
+    #[serde(default)]
+    pub config: serde_json::Value,
+    pub layout: WidgetLayout,
+}
+
+/// 网格坐标（0 基，单位 = 格）。
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WidgetLayout {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+}
+
 /// 供 CLI/测试快速构造变更消息。
 pub fn changes(items: Vec<TagChange>) -> ServerMsg {
     ServerMsg::Changes { items }
@@ -263,6 +324,53 @@ mod tests {
         };
         let j = serde_json::to_string(&m).unwrap();
         assert_eq!(j, r#"{"type":"hello","token":"abc"}"#);
+    }
+
+    #[test]
+    fn dashboard_msg_roundtrip() {
+        let d = DashboardDto {
+            id: "main".into(),
+            name: "总览".into(),
+            cols: 12,
+            widgets: vec![WidgetDto {
+                id: "w1".into(),
+                kind: "gauge".into(),
+                title: "AB 线电压".into(),
+                tag: "pm1.uab".into(),
+                unit: "V".into(),
+                config: serde_json::json!({ "min": 180, "max": 260 }),
+                layout: WidgetLayout {
+                    x: 0,
+                    y: 0,
+                    w: 3,
+                    h: 2,
+                },
+            }],
+        };
+        let msg = ClientMsg::SaveDashboard {
+            dashboard: d.clone(),
+        };
+        let j = serde_json::to_string(&msg).unwrap();
+        assert!(j.contains(r#""type":"saveDashboard""#), "{j}");
+        let back: ClientMsg = serde_json::from_str(&j).unwrap();
+        assert_eq!(msg, back);
+
+        let reply = ServerMsg::Dashboards {
+            dashboards: vec![d],
+        };
+        let j = serde_json::to_string(&reply).unwrap();
+        assert!(j.contains(r#""type":"dashboards""#), "{j}");
+        let back: ServerMsg = serde_json::from_str(&j).unwrap();
+        assert_eq!(reply, back);
+    }
+
+    /// cols 缺省为 12：老版本 UI/手写文件不必写全字段。
+    #[test]
+    fn dashboard_cols_defaults_to_12() {
+        let j = r#"{"id":"main","name":"总览","widgets":[]}"#;
+        let d: DashboardDto = serde_json::from_str(j).unwrap();
+        assert_eq!(d.cols, 12);
+        assert!(d.widgets.is_empty());
     }
 
     /// 回归：点表 DTO 必须能由 UI 端反序列化（bits 若用 u8-key map 会在此失败）。

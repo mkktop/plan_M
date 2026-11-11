@@ -354,6 +354,17 @@ impl Session {
                 Ok(_) => Ok(Some(ServerMsg::Snapshot(svc.snapshot().await))),
                 Err(e) => Ok(Some(ServerMsg::Error { message: e })),
             },
+            ClientMsg::GetDashboards => Ok(Some(ServerMsg::Dashboards {
+                dashboards: svc.dashboards().await,
+            })),
+            ClientMsg::SaveDashboard { dashboard } => match svc.save_dashboard(dashboard).await {
+                Ok(dashboards) => Ok(Some(ServerMsg::Dashboards { dashboards })),
+                Err(e) => Ok(Some(ServerMsg::Error { message: e })),
+            },
+            ClientMsg::RemoveDashboard { id } => match svc.remove_dashboard(&id).await {
+                Ok(dashboards) => Ok(Some(ServerMsg::Dashboards { dashboards })),
+                Err(e) => Ok(Some(ServerMsg::Error { message: e })),
+            },
         }
     }
 
