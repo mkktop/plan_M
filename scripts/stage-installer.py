@@ -16,7 +16,9 @@ assert platform == "windows-x64", f"unsupported platform: {platform}"
 files = list(Path(".").glob(os.environ["INSTALLER_GLOB"]))
 assert len(files) == 1, f"expected exactly one installer, got {files}"
 source = files[0]
-version = json.loads(Path("apps/desktop/src-tauri/tauri.conf.json").read_text())["version"]
+version = json.loads(
+    Path("apps/desktop/src-tauri/tauri.conf.json").read_text(encoding="utf-8")
+)["version"]
 suffix = "_x64-setup.exe"
 assert source.name.endswith(f"_{version}{suffix}"), (
     f"installer name {source.name!r} does not end with _{version}{suffix}"
@@ -33,5 +35,7 @@ manifest = {
     "source_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
     "source_tree": subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], text=True).strip(),
 }
-(directory / "build-info.json").write_text(json.dumps(manifest, indent=2) + "\n")
+(directory / "build-info.json").write_text(
+    json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+)
 print(json.dumps(manifest))
