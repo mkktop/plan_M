@@ -89,7 +89,7 @@ async function uploadInstallers({ github, context, core, tag, directory, platfor
     ;({ data: release } = await github.rest.repos.createRelease({
       ...context.repo,
       tag_name: tag,
-      name: `HMI Platform ${tag}`,
+      name: `planM ${tag}`,
       draft: true,
       prerelease: false,
       body: [

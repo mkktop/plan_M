@@ -1,12 +1,15 @@
-//! 桌面壳（thin）：只做 UI 宿主、连接信息读取与应用更新。
+//! 桌面壳（thin）：UI 宿主、gatewayd 进程托管、连接信息读取与应用更新。
 //!
 //! 采集、协议、配置真值全部在 gatewayd；这里不实现任何业务逻辑。
-//! UI 退出不杀 gatewayd —— 采集必须常驻。
+//! 桌面壳会自动拉起/回收 gatewayd（见 `supervisor`）——但只管理自己拉起的实例，
+//! 用户手动运行的外部 gatewayd 一律附着、不接管、不杀死。
 
+pub mod supervisor;
 pub mod updates;
 
 use serde::Serialize;
 use std::path::PathBuf;
+use tauri::Manager as _;
 
 /// UI 启动时拿到的 gatewayd 连接参数（对应 `ui/src/api/ws.ts` 的 GatewayInfo）。
 #[derive(Debug, Serialize)]
@@ -54,10 +57,23 @@ fn default_gateway_dir() -> PathBuf {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         // 文件/目录选择：设备包 zip 或解包目录 → 把绝对路径交给 gatewayd 导入。
         .plugin(tauri_plugin_dialog::init())
         .manage(updates::PendingUpdateState::new())
+        // UI 加载前确保采集服务在线：已有则附着，没有则拉起并等端口就绪。
+        .setup(|app| {
+            match supervisor::GatewaySupervisor::ensure(supervisor::DEFAULT_PORT) {
+                Ok(s) => {
+                    app.manage(supervisor::SupervisorState(std::sync::Mutex::new(s)));
+                }
+                Err(e) => {
+                    // 不阻断 UI：诊断/设置页会显示连接失败与手动启动指引
+                    eprintln!("[supervisor] {e}");
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             gateway_info,
             updates::get_app_version,
@@ -66,6 +82,14 @@ pub fn run() {
             updates::install_update,
             updates::open_update_release
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("error while running tauri application");
+    app.run(|app_handle, event| {
+        // 退出（含安装重启 app.exit）前回收自己拉起的 gatewayd；附着的实例不动
+        if let tauri::RunEvent::ExitRequested { .. } = event {
+            if let Some(state) = app_handle.try_state::<supervisor::SupervisorState>() {
+                state.0.lock().unwrap().shutdown();
+            }
+        }
+    });
 }

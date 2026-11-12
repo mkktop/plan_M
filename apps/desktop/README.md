@@ -6,6 +6,7 @@
 
 ```
 src-tauri/        Tauri 2 薄壳：窗口 + gateway_info（读 %APPDATA%/gatewayd/gateway.token）
+                 + supervisor.rs（gatewayd 进程托管：启动拉起/退出回收，只管自己拉起的）
                  + tauri-plugin-dialog（设备包 zip/目录选择）
                  + updates.rs（应用更新：检查/下载/安装/打开发布页）
                  + tauri.release.conf.json（仅 CI 构建叠加：把 gatewayd.exe 打进安装包）
@@ -52,6 +53,9 @@ UI 插件入口由 gatewayd 的 HTTP 静态服务提供（`/plugins/<id>/<entry>
 ## 约定
 
 - `src-tauri` 不写业务逻辑；新增能力先落在 gatewayd + `crates/wire`。
+  （supervisor 只做进程托管：探测 59120 → 附着或拉起 `gatewayd serve`（无窗口），
+  `RunEvent::ExitRequested` 时只回收自己拉起的子进程；二进制查找顺序 =
+  应用目录 gatewayd.exe → `target/release`（开发模式）。）
 - 新增 wire 消息要同时改 `crates/wire`、`apps/gatewayd/src/serve.rs`、
   `ui/src/api/types.ts`，并补 `ws_smoke` 断言。
 - 页面只读 Pinia，不自己解析服务端消息；订阅只覆盖当前可见设备/看板。

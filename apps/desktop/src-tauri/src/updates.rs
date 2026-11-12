@@ -523,7 +523,7 @@ mod tests {
             vec![(
                 "windows-x64",
                 installer(
-                    "HMI Platform_0.3.0-rc.1_x64-setup.exe",
+                    "planM_0.3.0-rc.1_x64-setup.exe",
                     GOOD_URL,
                     8_000_000,
                     GOOD_SHA256,
@@ -562,7 +562,7 @@ mod tests {
                 (
                     "windows-x64",
                     installer(
-                        "HMI Platform_0.3.0_x64-setup.exe",
+                        "planM_0.3.0_x64-setup.exe",
                         GOOD_URL,
                         8_000_000,
                         GOOD_SHA256,
@@ -571,12 +571,7 @@ mod tests {
                 // 其他平台的清单项按 key 直接忽略
                 (
                     "macos-arm64",
-                    installer(
-                        "HMI Platform_0.3.0_aarch64.dmg",
-                        GOOD_URL,
-                        8_000_000,
-                        GOOD_SHA256,
-                    ),
+                    installer("planM_0.3.0_aarch64.dmg", GOOD_URL, 8_000_000, GOOD_SHA256),
                 ),
             ],
         );
@@ -592,7 +587,7 @@ mod tests {
             vec![
                 (
                     "windows-x64",
-                    installer("HMI Platform_0.3.0_x64-setup.exe", GOOD_URL, 100, "nothex"),
+                    installer("planM_0.3.0_x64-setup.exe", GOOD_URL, 100, "nothex"),
                 ),
                 (
                     "windows-x64-backup",

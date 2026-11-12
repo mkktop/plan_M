@@ -163,8 +163,8 @@ onBeforeUnmount(() => {
             </svg>
           </div>
           <div class="brand-text">
-            <div class="brand-name">HMI</div>
-            <div class="brand-sub">PLAN M</div>
+            <div class="brand-name">planM</div>
+            <div class="brand-sub">上位机平台</div>
           </div>
         </div>
 

@@ -414,9 +414,10 @@ pnpm --dir ui dev                                 # 浏览器调试：?token=<ga
 - **rhai 驱动**：设备包可带 `driver.rhai`（`protocol.driver = "script"`），钩子
   `encode_read/encode_write/decode`；宿主白名单 API（crc16/hex/位运算），预编译校验；
   `Driver` 端口复用现有调度。
-- **打包**：~~安装包~~（CI 构建/发布/应用内更新已在 5.5 交付）；剩余：
-  gatewayd 自动拉起/退出管理（sidecar 或 Windows 服务模式）、托盘常驻、开机自启、
-  headless 网关部署文档。
+- **打包**：~~安装包~~（CI 构建/发布/应用内更新已在 5.5 交付）；
+  ~~gatewayd 自动拉起~~（supervisor 进程托管已交付：启动附着或拉起、退出只回收
+  自己拉起的实例、崩溃孤儿下次附着）；剩余：托盘常驻、开机自启、
+  Windows 服务模式、headless 网关部署文档。
 - **验收**：用 rhai 包跑通一台非标协议设备的 poll；安装包在干净机器上开箱可用。
 
 ## 8. 新会话开场建议

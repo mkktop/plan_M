@@ -314,9 +314,10 @@ GitHub Actions（与 pika_client 同一套机制）：
   （版本/说明/各平台安装包的规范资产名、百分号编码 URL、sha256）；手动确认后 publish。
   只提升「构建过且验证过」的产物，绝不改已发布的 Release。
 
-安装包内容：`HMI Platform_<版本>_x64-setup.exe`（含桌面应用 + 同版本 gatewayd.exe，
-装到同一目录）。装完从安装目录手动运行 `gatewayd serve`（数据目录仍在
-`%APPDATA%/gatewayd`）；自动拉起留给后续轮次。
+安装包内容：`planM_<版本>_x64-setup.exe`（含桌面应用 + 同版本 gatewayd.exe，
+装到同一目录）。**打开即用**：桌面壳启动时自动拉起 gatewayd（后台无窗口），
+退出时自动回收；已有外部 gatewayd 在跑则直接附着。数据目录在
+`%APPDATA%/gatewayd`。
 
 **应用内更新**（设置 → 应用与更新）：自研命令而非 tauri-plugin-updater —— 读 Release
 附带的静态清单 `releases/latest/download/latest.json`（不走 api.github.com，避开 60 次/小时
@@ -339,9 +340,10 @@ GitHub Actions（与 pika_client 同一套机制）：
 - 无 TLS（本地回环服务，token 鉴权已够用；跨机部署时再加）
 - 安装包未做代码签名：Windows SmartScreen 会提示「更多信息 → 仍要运行」；
   应用内更新依赖 GitHub 资产 sha256 摘要做完整性校验（不做来源签名验证）
-- 安装版 gatewayd 与手动 `cargo run` 版并存时需要自己避开 59120 端口冲突
-- Tauri 尚未自动拉起 gatewayd（sidecar 在后续轮次）；安装包里已附带 gatewayd.exe，
-  开发期仍手动 `serve`
+- 桌面壳自动拉起/回收 gatewayd，但**只管理自己拉起的实例**：手动运行的
+  gatewayd 一律附着不接管；应用异常崩溃时自己拉起的实例会留成孤儿，
+  下次启动按已有实例附着（不重复拉起、不丢采集）
+- 常驻驻留（托盘/开机自启）与 Windows 服务模式留到后续轮次
 - 浏览器调试模式导入设备包需要 gatewayd 本机路径；拖放/文件对话框只在桌面壳内可用
 - 仪表盘布局是「最后写入者胜」，多人同时编辑同一看板不做冲突合并
 - 设备类型 = 设备包；同一类型共享页面配置，但仪表盘按设备实例独立保存
