@@ -128,7 +128,37 @@
       "scale": 1,
       "unit": "W",
       "access": "rw",
-      "pollGroup": "fast"
+      "pollGroup": "fast",
+      "min": 0,
+      "max": 50000,
+      "step": 100
+    },
+    {
+      "id": "mode",
+      "name": "运行模式",
+      "register": "40311",
+      "type": "u16",
+      "access": "rw",
+      "pollGroup": "fast",
+      "min": 0,
+      "max": 2,
+      "step": 1,
+      "enum": [
+        { "value": 0, "label": "自动" },
+        { "value": 1, "label": "手动" },
+        { "value": 2, "label": "停止" }
+      ]
+    },
+    {
+      "id": "relay",
+      "name": "输出继电器",
+      "register": "40312",
+      "type": "u16",
+      "access": "rw",
+      "pollGroup": "fast",
+      "min": 0,
+      "max": 1,
+      "step": 1
     }
   ]
 }

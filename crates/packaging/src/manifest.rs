@@ -2,6 +2,7 @@
 
 use hmi_domain::points::ProtocolDefaults;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// 设备包清单：身份 + 版本兼容性 + 协议声明。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -55,8 +56,41 @@ pub struct UiComponentDecl {
     pub kind: String,
     #[serde(default)]
     pub title: String,
+    /// 槽位 → 绑定声明。设备包只允许相对点绑定（点 id / 位号），
+    /// 绝对 tag 绑定仅用户工作区页面可用。
+    #[serde(default)]
+    pub bind: BTreeMap<String, BindingDecl>,
+    /// 网格位置（12 列）；整页要么全部声明、要么全部省略（流式）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rect: Option<WidgetRectDecl>,
     #[serde(default)]
     pub config: serde_json::Value,
+}
+
+/// 组件在 12 列页面网格中的位置（单位 = 格；行高由宿主决定）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WidgetRectDecl {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+}
+
+/// 一个槽位的绑定：`point`（相对点）或 `tag`（绝对 tag）二选一；
+/// `bit` 只能与 `point` 组合。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BindingDecl {
+    /// 包内相对点 id（渲染时由宿主解析为 `<设备实例id>.<point>`）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub point: Option<String>,
+    /// 位号（对应点 `bits` 里的定义），解析为 `<设备实例id>.<point>.b<bit>`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bit: Option<u8>,
+    /// 绝对 tag（如 `pm1.uab`），设备包中禁止使用
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
 }
 
 /// 协议声明。

@@ -6,6 +6,7 @@ import AppIcon from '@/components/AppIcon.vue'
 import ConnectionPill from '@/components/ConnectionPill.vue'
 import DeviceTypeTabs from '@/components/DeviceTypeTabs.vue'
 import ToastStack from '@/components/ToastStack.vue'
+import WindowControls from '@/components/WindowControls.vue'
 import { gateway, isTauriRuntime, resolveGatewaySettings } from '@/api/ws'
 import { installGatewayBridge } from '@/api/bridge'
 import { pluginHost } from '@/plugins/host'
@@ -29,13 +30,10 @@ interface NavItem {
 
 const baseNav: NavItem[] = [
   { path: '/home', label: '首页', desc: '欢迎与总览', icon: 'home' },
-  { path: '/diagnostics', label: '诊断', desc: '连接与健康', icon: 'pulse' },
-  { path: '/dashboard', label: '仪表盘', desc: '全局组态', icon: 'layout' },
-  { path: '/channels', label: '通道', desc: '串口与总线', icon: 'plug' },
-  { path: '/devices', label: '设备', desc: '从站与实例', icon: 'chip' },
+  { path: '/diagnostics', label: '诊断', desc: '连接 / 日志 / 数据', icon: 'pulse' },
+  { path: '/devices', label: '设备', desc: '总线与从站', icon: 'chip' },
   { path: '/packages', label: '设备包', desc: '型号与点表', icon: 'package' },
   { path: '/plugins', label: '插件', desc: 'ESM UI 扩展', icon: 'plugin' },
-  { path: '/tags', label: '实时点表', desc: '全局数据', icon: 'grid' },
   { path: '/settings', label: '设置', desc: '连接与更新', icon: 'settings' },
 ]
 
@@ -155,8 +153,9 @@ onBeforeUnmount(() => {
 <template>
   <n-config-provider :theme="darkTheme" :locale="zhCN" :date-locale="dateZhCN" :theme-overrides="themeOverrides">
     <div class="app-shell">
-      <aside class="rail">
-        <div class="brand">
+      <!-- 自绘标题栏：窗口无系统边框，这一条就是窗口的标题栏（拖拽区 + 窗口按钮） -->
+      <header class="titlebar" data-tauri-drag-region="deep">
+        <div class="titlebar-brand">
           <div class="brand-glyph">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
               <path d="M3 13h4l2.5-7 4 13 2-6h5.5" />
@@ -168,6 +167,19 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
+        <div class="titlebar-context">
+          <span class="titlebar-kicker">{{ kicker }}</span>
+          <h1>{{ title }}</h1>
+        </div>
+
+        <div class="titlebar-tools">
+          <span class="clock mono">{{ clock }}</span>
+          <ConnectionPill @click="router.push('/diagnostics')" />
+          <WindowControls />
+        </div>
+      </header>
+
+      <aside class="rail">
         <div v-if="inDeviceWorkspace" class="rail-context">
           <span class="rail-context-label">设备类型</span>
           <strong>{{ activePackage?.name || activeTypeId }}</strong>
@@ -195,12 +207,12 @@ onBeforeUnmount(() => {
             type="button"
             class="rail-system"
             :class="{ active: !inDeviceWorkspace }"
-            title="返回系统页面"
+            title="切换到系统菜单"
             @click="router.push('/home')"
           >
             <AppIcon name="layout" :size="17" />
             <span class="nav-text">
-              <span>系统</span>
+              <span>切换系统菜单</span>
               <small>通道 / 设备包 / 插件</small>
             </span>
           </button>
@@ -216,17 +228,6 @@ onBeforeUnmount(() => {
       </aside>
 
       <div class="main">
-        <header class="topbar">
-          <div class="crumb">
-            <span class="crumb-kicker">{{ kicker }}</span>
-            <h1>{{ title }}</h1>
-          </div>
-          <div class="topbar-right">
-            <span class="clock mono">{{ clock }}</span>
-            <ConnectionPill @click="router.push('/diagnostics')" />
-          </div>
-        </header>
-
         <DeviceTypeTabs />
 
         <main class="content">

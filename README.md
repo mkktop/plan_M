@@ -12,7 +12,7 @@
 ┌─ UI 进程（Tauri 2 + Vue 3，随时可崩可关）──────────────┐
 │ 顶部：设备类型标签（一个设备包 = 一个类型）              │
 │ 左侧：当前类型的页面（设备包声明 + 用户自定义）           │
-│       底部固定「系统」入口（通道 / 设备包 / 插件 …）      │
+│       底部固定「切换系统菜单」入口（设备 / 设备包 / 插件 …）
 │ 页面组件：概览 / 仪表盘 / 实时点表 / 参数设置 + 插件组件  │
 └──────────────┬──────────────────────────────────────┘
                │ WebSocket @127.0.0.1:59120（JSON 消息，token 鉴权）
@@ -65,7 +65,7 @@ examples/ui-plugins/
 
 ```bash
 cargo build --workspace
-cargo test --workspace          # 110 个测试：编解码/帧/虚拟总线端到端/包校验/插件安装/工作区/仪表盘/WS 协议/更新校验
+cargo test --workspace          # 126 个测试：编解码/帧/虚拟总线端到端/包校验/插件安装/工作区/仪表盘/WS 协议/更新校验
 
 # 1) 校验示例设备包
 gatewayd pkg validate examples/packages/pm3000
@@ -117,20 +117,23 @@ Vue 3 + TypeScript + Vite + Pinia；Naive UI 只做表单控件，外壳/表格/
   `<data-dir>/workspaces.json`。
 - **首页**：Hello 欢迎页（时间问候、连接状态、时钟）、关键统计（在线设备/通道/点位/设备包/插件）、
   快速入口与设备概览；根路径 `/` 自动进入首页。
-- **诊断**：连接状态、WS 地址/token、`/health` 探测与延迟、运行统计、完整通信日志（收发帧摘要）。
-- **仪表盘**：12 列网格画布；数值卡 / 开关 / 仪表三种内置组件，绑定任意设备 tag；编辑模式拖拽移动、
-  右下角缩放（不允许重叠），改动防抖自动保存到 gatewayd（`<data-dir>/dashboards.json`）；开关只对
-  `access=rw` 的寄存器/线圈点可操作，值来自订阅回读而非本地猜测。
-- **通道**：串口枚举（含硬件 ID）、通道卡片与运行状态、新建/编辑（波特率/校验/超时/重试/帧间隔）、
-  从站扫描（结果可直接跳转添加设备）。
-- **设备**：按通道分组、在线状态、设备包版本与点位数、添加/删除设备、从设备包页带着型号预填添加。
+- **诊断**：连接状态、WS 地址/token、`/health` 探测与延迟、运行统计、完整通信日志（收发帧摘要）；
+  第二个标签「数据浏览」是跨设备的实时点表（值/单位/质量/更新时间、状态字位展开、`access=rw` 写值）。
+- **仪表盘**（宿主组件，仅出现在设备工作区）：12 列网格画布；数值卡 / 开关 / 仪表三种内置组件，
+  绑定任意设备 tag；编辑模式拖拽移动、右下角缩放（不允许重叠），改动防抖自动保存到 gatewayd
+  （`<data-dir>/dashboards.json`）；开关只对 `access=rw` 的寄存器/线圈点可操作，值来自订阅回读而非本地猜测。
+  设备包页面通过 `kind: "dashboard"` 引用它，按 `scopeKind/scopeId` 只展示当前设备的看板；
+  跨设备的全局组态尚未提供（预留 `scope=null` 的看板数据）。
+- **设备**：按总线（串口通道）分组，组头即总线状态/帧格式/扫描/编辑入口；组内从站卡片显示在线状态、
+  设备包版本与点位数，支持添加/删除设备、从扫描结果或设备包页带着型号/从站预填添加；页底为「本机串口」
+  枚举（含硬件 ID），可直接用某个口建通道。
 - **设备包**：已安装包列表、点表预览（地址/类型/单位/换算/读写/位展开）、在用设备数；
   桌面版支持 **zip/目录拖放** 与文件对话框，浏览器调试模式用 gatewayd 本机路径；导入失败逐字段内联展示，
   成功后自动选中新包并可直接添加设备。
 - **插件**：已安装 ESM UI 插件列表（版本/权限/贡献点/加载状态）、zip/目录导入与移除；
   插件贡献的导航页自动出现在侧栏，插件组件自动进入仪表盘「组件类型」下拉框。
-- **实时点表**：按设备查看点位；只订阅当前设备的 tag（bit 子 tag 一并订阅），值/单位/质量/更新时间，
-  状态字位展开为芯片，`access=rw` 的点可写值（工程量，gatewayd 负责反算 scale/offset）。
+- **实时点表**（宿主组件，设备工作区）：按设备查看点位；只订阅当前设备的 tag（bit 子 tag 一并订阅），
+  值/单位/质量/更新时间，状态字位展开为芯片，`access=rw` 的点可写值（工程量，gatewayd 负责反算 scale/offset）。
 - **设置**：连接（WS 地址/token 编辑，从诊断页迁移）+ 应用与更新（当前版本、检查更新、
   下载进度、安装并重启、打开发布页）；更新命令在 `src-tauri/src/updates.rs`。
 
@@ -169,7 +172,11 @@ Tauri 侧只加了一个 `tauri-plugin-dialog`（文件/目录选择）与 `gate
       "byteOrder": "cdab", "scale": 0.01, "unit": "kWh", "pollGroup": "slow" },
     { "id": "status", "register": "40300", "type": "u16",
       "bits": { "0": { "name": "运行" }, "2": { "name": "报警" } } },
-    { "id": "setpoint", "register": "40310", "type": "u16", "access": "rw" }
+    { "id": "setpoint", "register": "40310", "type": "u16", "access": "rw",
+      "min": 0, "max": 50000, "step": 100 },
+    { "id": "mode", "register": "40311", "type": "u16", "access": "rw",
+      "min": 0, "max": 2, "step": 1,
+      "enum": [ { "value": 0, "label": "自动" }, { "value": 1, "label": "手动" } ] }
   ]
 }
 ```
@@ -181,6 +188,9 @@ Tauri 侧只加了一个 `tauri-plugin-dialog`（文件/目录选择）与 `gate
 - **字节序显式声明**：`abcd`（标准）/ `cdab`（国产电表最常见字交换）/
   `badc`（字内字节交换）/ `dcba`（全反转）。多字值不写会 warning —— 485 头号坑。
 - **位展开**：状态字加 `bits` 后自动生成 `<点>.b0` 子 tag（只读）。
+- **写值元数据**：`min` / `max` / `step` / `enum` 按**工程量**（scale/offset 换算后）口径，
+  供组件生成输入边界、步进与枚举选项；`enum` 仅整数类型，位区域点不支持。
+  这些字段会随 `snapshot` 的 `PointDto` 下发，组件写值前由宿主校验范围。
 - **轮询组**：按频率分组，编译器把组内相邻寄存器**合并成读块**（间隔 ≤4 合并，≤125 字/块），
   30 点的设备通常只需 3~4 个事务。
 - 实例覆盖：设备实例可用 `overrides` 单点改 `scale`/`offset`/`pollGroup`（同型号多台不复制点表）。
@@ -195,8 +205,23 @@ Tauri 侧只加了一个 `tauri-plugin-dialog`（文件/目录选择）与 `gate
   "pages": [
     { "id": "overview", "title": "设备概览", "icon": "pulse",
       "components": [{ "kind": "overview" }] },
-    { "id": "dashboard", "title": "仪表盘", "icon": "layout",
-      "components": [{ "kind": "dashboard" }] },
+    { "id": "monitor", "title": "运行监测", "icon": "activity",
+      "components": [
+        { "kind": "core:value", "title": "AB 线电压",
+          "rect": { "x": 0, "y": 0, "w": 3, "h": 2 },
+          "bind": { "value": { "point": "uab" } },
+          "config": { "decimals": 1 } },
+        { "kind": "core:value", "title": "运行状态",
+          "rect": { "x": 3, "y": 0, "w": 3, "h": 2 },
+          "bind": { "value": { "point": "status", "bit": 0 } } },
+        { "kind": "core:gauge", "title": "有功功率",
+          "rect": { "x": 6, "y": 0, "w": 3, "h": 2 },
+          "bind": { "value": { "point": "p" } },
+          "config": { "min": 0, "max": 50000, "decimals": 0 } },
+        { "kind": "core:input", "title": "功率上限设定",
+          "rect": { "x": 9, "y": 0, "w": 3, "h": 2 },
+          "bind": { "value": { "point": "setpoint" } } }
+      ] },
     { "id": "my-page", "title": "我的页面", "icon": "grid",
       "components": [{ "kind": "overview", "title": "状态" },
                      { "kind": "tags", "title": "实时值" }] }
@@ -209,12 +234,30 @@ Tauri 侧只加了一个 `tauri-plugin-dialog`（文件/目录选择）与 `gate
 - `overview`：设备状态/质量统计/通道与包信息；
 - `dashboard`：当前设备的仪表盘画布（每个实例独立布局）；
 - `tags`：当前设备的实时点表与写值；
-- `settings`：设备实例名称/通道/从站/overrides。
+- `settings`：设备实例名称/通道/从站/overrides；
+- `core:value`（别名 `value`）：绑定一个点/位，显示工程量、质量与单位；
+- `core:gauge`（别名 `gauge`）：绑定一个数值点，按 `min/max` 显示弧线刻度；
+- `core:switch`（别名 `switch`）：绑定可写点，点击写入 0/1（线圈点写布尔）；
+- `core:input`（别名 `input`）：按 `min/max/step/enum` 生成数值输入或枚举下拉；
+- `core:bits`（别名 `bits`）：绑定一个字点，按 `bits` 定义逐位展示状态与质量。
 
 规则：
 
 - 包未声明 `ui` 时使用宿主内置四页（概览/仪表盘/实时点表/参数设置），旧包无需修改。
-- 页面按**类型共享**；用户在工作区点「编辑页面」可增删页面、改名、排序，并在页面里组合多个组件。
+- **绑定是相对点**：`bind` 是「槽位 → `{point, bit}`」；宿主在渲染时解析成
+  `<当前设备实例id>.<point>[.b<bit>]`，同一页面可被同型号的多台设备复用。
+  `point` 必须存在于本包点表，`bit` 必须在该点 `bits` 里声明过（安装时校验）。
+- **绝对 tag 只属于用户页面**：设备包清单里出现 `{ "tag": "pm1.uab" }` 会被安装拒绝；
+  用户在工作区编辑页面时可用绝对 tag 做跨设备组态。
+- **网格布局**：组件可带 `rect: {x,y,w,h}`（12 列、0 基、行高 72px、间距 12px）；
+  整页必须全部声明或全部省略。越界/重叠在安装与保存时拒绝；窄屏自动降为单列。
+  不带 `rect` 的页面保持流式排列（连续小组件自动合并为一行网格）。
+- `config` 由组件自行解释、宿主原样保存：`core:value` 支持 `decimals`/`precision`/`unit`，
+  `core:gauge` 额外支持 `min`/`max`，`core:switch` 支持 `onLabel`/`offLabel`，
+  `core:input` 支持覆盖点表的 `min`/`max`/`step`/`decimals`。
+- **写值由宿主把关**：`access` 必须为 `rw`；数值按点表 `min/max` 校验；
+  位绑定采用“读父点整字 → 改位 → 写回”，点带 `scale/offset` 时拒绝位写（请直接写父点）。
+- 页面按**类型共享**；用户在工作区点「编辑页面」可增删页面、改名、排序，并在页面里组合组件。
 - 用户修改保存到 `<data-dir>/workspaces.json`；「恢复包默认页面」会删除该类型覆盖。
 - 包升级不会自动覆盖已保存的自定义页面；需要新默认页面时点恢复。
 - 顶部类型标签 = 已安装设备包（一个包一个类型），导入后立即出现；无设备时工作区显示添加引导。
@@ -289,7 +332,8 @@ UI 插件（`UiPluginDto`）：`{ id, name, version, sdkVersion, permissions[], 
 `getUiPlugins/importUiPlugin/removeUiPlugin` 统一以 `uiPlugins` 返回完整列表；安装支持目录或 zip。
 
 设备工作区（`WorkspaceDto`）：`{ deviceType, pages[] }`；page 为
-`{ id, title, icon, components[{ kind, title, config }] }`。`deviceType` 是设备包 id；
+`{ id, title, icon, components[{ kind, title, bind?, rect?, config }] }`，组件绑定为
+`{ 槽位: { point, bit } | { tag } }`，`rect` 为 `{ x, y, w, h }`（12 列网格）。`deviceType` 是设备包 id；
 `getWorkspaces/saveWorkspace/removeWorkspace` 统一以 `workspaces` 返回完整列表。
 `PackageDto.ui.pages` 提供包默认页面，`workspaces` 保存用户覆盖。
 

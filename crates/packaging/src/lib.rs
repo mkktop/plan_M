@@ -20,7 +20,10 @@ pub use ui_plugin::{
     install_ui_plugin, load_ui_plugin_dir, validate_ui_plugin, InstalledUiPlugin, UiPluginError,
     UiPluginManifest, UiPluginRegistry, ALLOWED_PERMISSIONS, SDK_VERSION,
 };
-pub use validate::{validate_package, ValidationIssues, ALLOWED_DEVICE_PAGE_COMPONENTS};
+pub use validate::{
+    validate_component_rects, validate_package, ValidationIssues, ALLOWED_DEVICE_PAGE_COMPONENTS,
+    PAGE_GRID_COLS,
+};
 
 /// JSON Schema 文本（供编辑器补全/校验，与运行时 Rust 校验并行存在）。
 pub mod schemas {

@@ -56,6 +56,11 @@ export interface BitDto {
   off: string | null
 }
 
+export interface EnumValueDto {
+  value: number
+  label: string
+}
+
 export interface PointDto {
   id: string
   name: string
@@ -67,6 +72,14 @@ export interface PointDto {
   offset: number | null
   unit: string
   bits: BitDto[]
+  /** 写值下限（工程量） */
+  min?: number | null
+  /** 写值上限（工程量） */
+  max?: number | null
+  /** 写值步长（工程量） */
+  step?: number | null
+  /** 枚举写值表（仅整数类型；值按工程量口径） */
+  enum?: EnumValueDto[]
 }
 
 export interface PackageDto {
@@ -93,10 +106,29 @@ export interface DevicePageDto {
   components: DevicePageComponentDto[]
 }
 
+/** 一个槽位的绑定：point（相对点）或 tag（绝对 tag）二选一，bit 只与 point 组合。 */
+export interface BindingDecl {
+  point?: string | null
+  bit?: number | null
+  tag?: string | null
+}
+
+/** 12 列网格位置（0 基，单位 = 格）。 */
+export interface WidgetRect {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
 export interface DevicePageComponentDto {
-  /** overview / dashboard / tags / settings */
+  /** overview / dashboard / tags / settings / core:value / core:gauge / core:switch / core:input / core:bits */
   kind: string
   title: string
+  /** 槽位 → 绑定；包内页面用相对点，用户页面可用绝对 tag */
+  bind?: Record<string, BindingDecl>
+  /** 网格位置；整页要么全有、要么全无（流式） */
+  rect?: WidgetRect | null
   config: Record<string, unknown> | null
 }
 

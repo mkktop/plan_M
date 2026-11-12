@@ -14,6 +14,7 @@ use hmi_domain::config::{DeviceConfig, Parity, SerialChannelConfig};
 use hmi_domain::points::Access;
 use hmi_domain::value::{TagChange, Value};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 // —— 客户端 → 服务端 ——
 
@@ -253,12 +254,40 @@ pub struct DevicePageDto {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DevicePageComponentDto {
-    /// 宿主组件：overview / dashboard / tags / settings
+    /// 宿主组件：overview / dashboard / tags / settings / core:value / core:gauge
     pub kind: String,
     #[serde(default)]
     pub title: String,
+    /// 槽位 → 绑定；包内通常声明相对点（point/bit），用户页面可声明绝对 tag
+    #[serde(default)]
+    pub bind: BTreeMap<String, BindingDeclDto>,
+    /// 12 列网格位置；整页要么全部声明、要么全部省略（流式）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rect: Option<WidgetRectDto>,
     #[serde(default)]
     pub config: serde_json::Value,
+}
+
+/// 组件网格位置（0 基，单位 = 格）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WidgetRectDto {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+}
+
+/// 一个槽位的绑定声明：point 与 tag 二选一，bit 只与 point 组合。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BindingDeclDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub point: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bit: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
 }
 
 /// 某个设备类型的工作区页面配置（workspaces.json）。
@@ -289,6 +318,26 @@ pub struct PointDto {
     /// 状态字位展开定义（位号升序；JSON 用数组，避免整数 map key 的反序列化坑）
     #[serde(default)]
     pub bits: Vec<BitDto>,
+    /// 写值下限（工程量）；None = 不限制
+    #[serde(default)]
+    pub min: Option<f64>,
+    /// 写值上限（工程量）；None = 不限制
+    #[serde(default)]
+    pub max: Option<f64>,
+    /// 写值步长（工程量）；None = 不限制
+    #[serde(default)]
+    pub step: Option<f64>,
+    /// 枚举写值表（仅整数类型；值按工程量口径）
+    #[serde(rename = "enum", default)]
+    pub value_enum: Vec<EnumValueDto>,
+}
+
+/// 枚举点的一个可取项。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnumValueDto {
+    pub value: i64,
+    pub label: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -581,6 +630,8 @@ mod tests {
             components: vec![DevicePageComponentDto {
                 kind: "overview".into(),
                 title: String::new(),
+                bind: Default::default(),
+                rect: None,
                 config: serde_json::json!({ "compact": true }),
             }],
         };
@@ -653,6 +704,10 @@ mod tests {
                         on: None,
                         off: None,
                     }],
+                    min: None,
+                    max: None,
+                    step: None,
+                    value_enum: vec![],
                 }],
             }],
             tags: vec![],

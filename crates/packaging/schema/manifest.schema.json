@@ -40,10 +40,61 @@
                   "required": ["kind"],
                   "properties": {
                     "kind": {
-                      "enum": ["overview", "dashboard", "tags", "settings"],
-                      "description": "宿主组件：overview/dashboard/tags/settings"
+                      "enum": [
+                        "overview",
+                        "dashboard",
+                        "tags",
+                        "settings",
+                        "value",
+                        "gauge",
+                        "switch",
+                        "input",
+                        "bits",
+                        "core:value",
+                        "core:gauge",
+                        "core:switch",
+                        "core:input",
+                        "core:bits"
+                      ],
+                      "description": "宿主组件：overview/dashboard/tags/settings/core:value/core:gauge/core:switch/core:input/core:bits（裸名为兼容别名）"
                     },
                     "title": { "type": "string", "maxLength": 120 },
+                    "rect": {
+                      "type": "object",
+                      "description": "12 列网格位置（0 基）；整页要么全部声明、要么全部省略（流式）",
+                      "required": ["x", "y", "w", "h"],
+                      "properties": {
+                        "x": { "type": "integer", "minimum": 0, "maximum": 11 },
+                        "y": { "type": "integer", "minimum": 0 },
+                        "w": { "type": "integer", "minimum": 1, "maximum": 12 },
+                        "h": { "type": "integer", "minimum": 1 }
+                      },
+                      "additionalProperties": false
+                    },
+                    "bind": {
+                      "type": "object",
+                      "description": "槽位 → 绑定。设备包只允许相对点绑定（point/bit），禁止绝对 tag",
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "point": {
+                            "type": "string",
+                            "description": "包内相对点 id，渲染时解析为 <设备实例id>.<point>"
+                          },
+                          "bit": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 15,
+                            "description": "位号，解析为 <设备实例id>.<point>.b<bit>"
+                          },
+                          "tag": {
+                            "type": "string",
+                            "description": "绝对 tag（仅用户页面允许；设备包内会被拒绝）"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
                     "config": { "type": ["object", "null"] }
                   }
                 }

@@ -156,6 +156,14 @@ pub fn validate_workspace(w: &WorkspaceDto) -> Result<(), String> {
         if page.components.len() > MAX_COMPONENTS {
             return Err(format!("页面 `{}` 组件最多 {MAX_COMPONENTS} 个", page.id));
         }
+        let rects: Vec<Option<(u32, u32, u32, u32)>> = page
+            .components
+            .iter()
+            .map(|c| c.rect.map(|r| (r.x, r.y, r.w, r.h)))
+            .collect();
+        for e in hmi_packaging::validate_component_rects(&page.id, &rects) {
+            return Err(e);
+        }
         for comp in &page.components {
             if !ALLOWED_DEVICE_PAGE_COMPONENTS.contains(&comp.kind.as_str()) {
                 return Err(format!(
@@ -173,6 +181,36 @@ pub fn validate_workspace(w: &WorkspaceDto) -> Result<(), String> {
                     "页面 `{}` 的组件 `{}` config 必须是 JSON 对象",
                     page.id, comp.kind
                 ));
+            }
+            for (slot, b) in &comp.bind {
+                if slot.trim().is_empty() {
+                    return Err(format!(
+                        "页面 `{}` 的组件 `{}` 存在空绑定槽位",
+                        page.id, comp.kind
+                    ));
+                }
+                let has_point = b.point.as_deref().is_some_and(|s| !s.trim().is_empty());
+                let has_tag = b.tag.as_deref().is_some_and(|s| !s.trim().is_empty());
+                if has_point == has_tag {
+                    return Err(format!(
+                        "页面 `{}` 的组件 `{}` 槽位 `{slot}`：必须且只能声明 point 或 tag 之一",
+                        page.id, comp.kind
+                    ));
+                }
+                if b.bit.is_some() && !has_point {
+                    return Err(format!(
+                        "页面 `{}` 的组件 `{}` 槽位 `{slot}`：bit 只能与 point 组合",
+                        page.id, comp.kind
+                    ));
+                }
+                if has_tag && !valid_tag(b.tag.as_deref().unwrap_or_default()) {
+                    return Err(format!(
+                        "页面 `{}` 的组件 `{}` 槽位 `{slot}`：tag `{}` 非法",
+                        page.id,
+                        comp.kind,
+                        b.tag.as_deref().unwrap_or_default()
+                    ));
+                }
             }
         }
     }
@@ -197,6 +235,16 @@ fn valid_page_id(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+/// 绝对 tag：`<设备id>.<点id>[.b<N>]` 或未来的 `$` 系统命名空间。
+fn valid_tag(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 192
+        && s.split('.').count() >= 2
+        && s.split('.').all(|part| !part.is_empty())
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '$'))
+}
+
 /// 默认存储路径。
 pub fn workspaces_path(data_dir: &Path) -> PathBuf {
     data_dir.join("workspaces.json")
@@ -215,6 +263,8 @@ mod tests {
             components: vec![DevicePageComponentDto {
                 kind: kind.into(),
                 title: String::new(),
+                bind: Default::default(),
+                rect: None,
                 config: serde_json::json!({}),
             }],
         }
@@ -278,6 +328,123 @@ mod tests {
         let path = workspaces_path(tmp.path());
         std::fs::write(&path, "{ not json").unwrap();
         assert!(WorkspaceStore::load(&path).list().is_empty());
+    }
+
+    #[test]
+    fn binding_declarations_validated() {
+        use hmi_wire::BindingDeclDto;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut store = WorkspaceStore::load(workspaces_path(tmp.path()));
+
+        let with_bind = |bind: BindingDeclDto| {
+            let mut w = sample();
+            w.pages[0].components[0] = DevicePageComponentDto {
+                kind: "core:value".into(),
+                title: String::new(),
+                bind: [("value".to_string(), bind)].into_iter().collect(),
+                rect: None,
+                config: serde_json::json!({}),
+            };
+            w
+        };
+
+        // 用户页面允许相对点与绝对 tag 两种绑定
+        assert!(store
+            .upsert(with_bind(BindingDeclDto {
+                point: Some("uab".into()),
+                bit: None,
+                tag: None,
+            }))
+            .is_ok());
+        assert!(store
+            .upsert(with_bind(BindingDeclDto {
+                point: None,
+                bit: None,
+                tag: Some("pm1.uab".into()),
+            }))
+            .is_ok());
+
+        let err = store
+            .upsert(with_bind(BindingDeclDto {
+                point: None,
+                bit: None,
+                tag: Some("pm1".into()),
+            }))
+            .unwrap_err();
+        assert!(err.contains("非法"), "{err}");
+
+        let err = store
+            .upsert(with_bind(BindingDeclDto {
+                point: Some("uab".into()),
+                bit: None,
+                tag: Some("pm1.uab".into()),
+            }))
+            .unwrap_err();
+        assert!(err.contains("只能声明"), "{err}");
+
+        let err = store
+            .upsert(with_bind(BindingDeclDto {
+                point: None,
+                bit: Some(2),
+                tag: Some("pm1.status.b2".into()),
+            }))
+            .unwrap_err();
+        assert!(err.contains("bit 只能与 point"), "{err}");
+    }
+
+    #[test]
+    fn component_rects_validated() {
+        use hmi_wire::WidgetRectDto;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut store = WorkspaceStore::load(workspaces_path(tmp.path()));
+
+        let comp = |kind: &str, rect: Option<WidgetRectDto>| DevicePageComponentDto {
+            kind: kind.into(),
+            title: String::new(),
+            bind: Default::default(),
+            rect,
+            config: serde_json::json!({}),
+        };
+
+        let mut w = sample();
+        w.pages[0].components = vec![
+            comp(
+                "core:value",
+                Some(WidgetRectDto {
+                    x: 0,
+                    y: 0,
+                    w: 6,
+                    h: 2,
+                }),
+            ),
+            comp(
+                "core:gauge",
+                Some(WidgetRectDto {
+                    x: 3,
+                    y: 0,
+                    w: 6,
+                    h: 2,
+                }),
+            ),
+        ];
+        assert!(store.upsert(w).unwrap_err().contains("rect 重叠"));
+
+        let mut w = sample();
+        w.pages[0].components = vec![
+            comp(
+                "core:value",
+                Some(WidgetRectDto {
+                    x: 0,
+                    y: 0,
+                    w: 3,
+                    h: 2,
+                }),
+            ),
+            comp("core:value", None),
+        ];
+        assert!(store.upsert(w).unwrap_err().contains("全部组件都声明"));
     }
 
     #[test]

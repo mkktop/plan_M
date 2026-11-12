@@ -27,6 +27,65 @@
         "components": [{ "kind": "tags" }]
       },
       {
+        "id": "monitor",
+        "title": "运行监测",
+        "icon": "activity",
+        "components": [
+          {
+            "kind": "core:value",
+            "title": "AB 线电压",
+            "rect": { "x": 0, "y": 0, "w": 3, "h": 2 },
+            "bind": { "value": { "point": "uab" } },
+            "config": { "decimals": 1 }
+          },
+          {
+            "kind": "core:value",
+            "title": "A 相电流",
+            "rect": { "x": 3, "y": 0, "w": 3, "h": 2 },
+            "bind": { "value": { "point": "ia" } },
+            "config": { "precision": 2 }
+          },
+          {
+            "kind": "core:gauge",
+            "title": "有功功率",
+            "rect": { "x": 6, "y": 0, "w": 3, "h": 2 },
+            "bind": { "value": { "point": "p" } },
+            "config": { "min": 0, "max": 50000, "decimals": 0 }
+          },
+          {
+            "kind": "core:value",
+            "title": "运行状态",
+            "rect": { "x": 9, "y": 0, "w": 3, "h": 2 },
+            "bind": { "value": { "point": "status", "bit": 0 } }
+          },
+          {
+            "kind": "core:input",
+            "title": "功率上限设定",
+            "rect": { "x": 0, "y": 2, "w": 3, "h": 2 },
+            "bind": { "value": { "point": "setpoint" } }
+          },
+          {
+            "kind": "core:input",
+            "title": "运行模式",
+            "rect": { "x": 3, "y": 2, "w": 3, "h": 2 },
+            "bind": { "value": { "point": "mode" } }
+          },
+          {
+            "kind": "core:switch",
+            "title": "输出继电器",
+            "rect": { "x": 6, "y": 2, "w": 3, "h": 2 },
+            "bind": { "value": { "point": "relay" } },
+            "config": { "onLabel": "闭合", "offLabel": "断开" }
+          },
+          {
+            "kind": "core:bits",
+            "title": "状态位",
+            "rect": { "x": 9, "y": 2, "w": 3, "h": 2 },
+            "bind": { "value": { "point": "status" } }
+          }
+        ]
+      },
+      {
         "id": "settings",
         "title": "参数设置",
         "icon": "settings",

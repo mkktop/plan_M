@@ -6,11 +6,16 @@ import AppIcon from '@/components/AppIcon.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import ModalShell from '@/components/ModalShell.vue'
 import PageHeader from '@/components/PageHeader.vue'
+import ChannelFormModal from '@/components/channel/ChannelFormModal.vue'
+import ChannelScanModal from '@/components/channel/ChannelScanModal.vue'
+import SerialPortsCard from '@/components/channel/SerialPortsCard.vue'
 import { useConnectionStore } from '@/stores/connection'
 import { useProjectStore } from '@/stores/project'
 import { errorMessage, useToastStore } from '@/stores/toast'
 import type { ChannelDto, DeviceDto } from '@/api/types'
 
+// 设备页 = 总线（串口通道）+ 从站设备。通道是设备的父级，所以合并在一页：
+// 每条总线一个分组，组头就是总线的状态/参数/扫描/编辑入口。
 const route = useRoute()
 const router = useRouter()
 const project = useProjectStore()
@@ -22,6 +27,14 @@ const saving = ref(false)
 const idTouched = ref(false)
 const pendingDelete = ref<DeviceDto | null>(null)
 const deleting = ref(false)
+
+// 总线（通道）
+const channelFormOpen = ref(false)
+const channelDraft = ref<ChannelDto | null>(null)
+const channelInitialPort = ref<string | undefined>(undefined)
+const scanChannel = ref<ChannelDto | null>(null)
+const pendingChannelDelete = ref<ChannelDto | null>(null)
+const deletingChannel = ref(false)
 
 const form = reactive({
   channelId: '',
@@ -38,15 +51,24 @@ const packageOptions = computed(() =>
   project.packages.map((p) => ({ label: `${p.name} · v${p.version}`, value: p.id })),
 )
 
-const STATE_TONE: Record<string, string> = {
-  running: 'ok',
-  recovering: 'warn',
-  faulted: 'bad',
-  stopped: 'idle',
+const STATE_META: Record<string, { label: string; tone: string }> = {
+  running: { label: '运行中', tone: 'ok' },
+  recovering: { label: '重连中', tone: 'warn' },
+  faulted: { label: '故障', tone: 'bad' },
+  stopped: { label: '已停止', tone: 'idle' },
 }
 
-function stateTone(ch: ChannelDto): string {
-  return STATE_TONE[project.channelStates[ch.id] ?? ch.state] ?? 'idle'
+function stateOf(ch: ChannelDto): { label: string; tone: string } {
+  const s = project.channelStates[ch.id] ?? ch.state
+  return STATE_META[s] ?? { label: s, tone: 'idle' }
+}
+
+function parityLetter(p: string): string {
+  return p === 'none' ? 'N' : p === 'odd' ? 'O' : 'E'
+}
+
+function onlineOn(channelId: string): number {
+  return project.devicesOn(channelId).filter((d) => d.online).length
 }
 
 function pointCount(d: DeviceDto): number {
@@ -130,10 +152,58 @@ async function doDelete(): Promise<void> {
 }
 
 function gotoTags(d: DeviceDto): void {
-  router.push({ path: '/tags', query: { device: d.id } })
+  router.push({ path: '/diagnostics', query: { tab: 'data', device: d.id } })
 }
 
-// 从「扫描从站」跳转过来时自动打开添加对话框（快照可能已加载，也可能还在路上）。
+// —— 总线（通道）操作 ——
+
+async function openChannelCreate(port?: string): Promise<void> {
+  // 表单默认端口来自串口枚举；还没枚举过就先拉一次，失败也不阻断（可手填/SIM）
+  if (conn.connected && !project.serialPorts.length) {
+    try {
+      await project.loadSerialPorts()
+    } catch {
+      // 忽略：用户仍可选择 SIM 或手工输入串口名
+    }
+  }
+  channelDraft.value = null
+  channelInitialPort.value = port
+  channelFormOpen.value = true
+}
+
+function openChannelEdit(ch: ChannelDto): void {
+  channelDraft.value = ch
+  channelInitialPort.value = undefined
+  channelFormOpen.value = true
+}
+
+function requestChannelDelete(ch: ChannelDto): void {
+  channelFormOpen.value = false
+  pendingChannelDelete.value = ch
+}
+
+async function doDeleteChannel(): Promise<void> {
+  const ch = pendingChannelDelete.value
+  if (!ch) return
+  deletingChannel.value = true
+  try {
+    await project.removeChannel(ch.id)
+    toast.success(`通道 ${ch.id} 已删除`)
+    pendingChannelDelete.value = null
+  } catch (e) {
+    toast.error(errorMessage(e))
+  } finally {
+    deletingChannel.value = false
+  }
+}
+
+function addDeviceFromScan(slave: number): void {
+  const ch = scanChannel.value
+  scanChannel.value = null
+  openAdd(ch?.id, slave)
+}
+
+// 从设备包页 / 设备工作区跳转过来时自动打开添加对话框（快照可能已加载，也可能还在路上）。
 const prefill = ref<{ channel?: string; slave?: number; packageId?: string } | null>(null)
 
 function applyPrefill(): void {
@@ -161,12 +231,24 @@ onMounted(() => {
 
 <template>
   <div class="page">
-    <PageHeader title="设备" subtitle="设备 = 设备包 + 通道 + 从站地址；导入设备包即可支持新型号">
+    <PageHeader
+      title="设备"
+      subtitle="一条串口总线挂多台从站；设备 = 设备包 + 总线 + 从站地址"
+    >
+      <n-button size="small" @click="openChannelCreate()">
+        <template #icon><AppIcon name="plug" :size="15" /></template>
+        新建通道
+      </n-button>
       <n-button size="small" @click="router.push('/packages')">
         <template #icon><AppIcon name="package" :size="15" /></template>
         设备包管理
       </n-button>
-      <n-button size="small" type="primary" :disabled="!project.channels.length || !project.packages.length" @click="openAdd()">
+      <n-button
+        size="small"
+        type="primary"
+        :disabled="!project.channels.length || !project.packages.length"
+        @click="openAdd()"
+      >
         <template #icon><AppIcon name="plus" :size="15" /></template>
         添加设备
       </n-button>
@@ -174,13 +256,7 @@ onMounted(() => {
 
     <div v-if="!conn.connected" class="banner warn">
       <AppIcon name="alert" :size="16" />
-      <span>未连接 gatewayd，设备配置不可编辑。</span>
-    </div>
-
-    <div v-if="!project.channels.length && project.loaded" class="banner warn">
-      <AppIcon name="alert" :size="16" />
-      <span>还没有通道。先到「通道」页创建一条串口通道，再添加设备。</span>
-      <n-button size="tiny" quaternary @click="router.push('/channels')">去创建</n-button>
+      <span>未连接 gatewayd，设备与总线的配置不可编辑。</span>
     </div>
 
     <div v-if="!project.packages.length && project.loaded" class="banner info">
@@ -189,17 +265,28 @@ onMounted(() => {
       <n-button size="tiny" quaternary @click="router.push('/packages')">去导入</n-button>
     </div>
 
-    <template v-if="project.devices.length">
+    <template v-if="project.channels.length">
       <section v-for="ch in project.channels" :key="ch.id" class="channel-group">
         <header class="group-head">
-          <span class="state-dot" :class="stateTone(ch)" />
+          <span class="state-dot" :class="stateOf(ch).tone" :title="stateOf(ch).label" />
           <h3>{{ ch.name || ch.id }}</h3>
           <code>{{ ch.id }} · {{ ch.port }}</code>
-          <span class="muted small">{{ project.devicesOn(ch.id).length }} 台</span>
+          <span class="state-pill" :class="stateOf(ch).tone">{{ stateOf(ch).label }}</span>
+          <span class="group-frame mono">
+            {{ ch.baudRate }} bps · {{ ch.dataBits }}{{ parityLetter(ch.parity) }}{{ ch.stopBits }}
+          </span>
           <div class="spacer" />
+          <span class="muted small">
+            {{ project.devicesOn(ch.id).length }} 台 · 在线 {{ onlineOn(ch.id) }}
+          </span>
+          <n-button size="tiny" quaternary @click="scanChannel = ch">
+            <template #icon><AppIcon name="scan" :size="14" /></template>
+            扫描
+          </n-button>
+          <n-button size="tiny" quaternary @click="openChannelEdit(ch)">编辑</n-button>
           <n-button size="tiny" quaternary @click="openAdd(ch.id)">
             <template #icon><AppIcon name="plus" :size="14" /></template>
-            添加
+            添加设备
           </n-button>
         </header>
 
@@ -247,21 +334,38 @@ onMounted(() => {
         </div>
 
         <div v-if="!project.devicesOn(ch.id).length" class="group-empty muted">
-          该通道还没有设备
+          这条总线还没有从站。接好设备后点「添加设备」，或用「扫描」自动找地址。
         </div>
       </section>
     </template>
 
     <EmptyState
       v-else-if="project.loaded"
-      icon="chip"
-      title="还没有设备"
-      text="选择通道、设备包与从站地址即可添加；同型号多台设备共用一份点表。"
+      icon="plug"
+      title="还没有总线（串口通道）"
+      text="接入 USB-485 后为它建一条总线；没有硬件时可用 SIM 虚拟总线演示。"
     >
-      <n-button size="small" type="primary" :disabled="!project.channels.length || !project.packages.length" @click="openAdd()">
-        添加设备
-      </n-button>
+      <n-button size="small" type="primary" @click="openChannelCreate()">新建通道</n-button>
     </EmptyState>
+
+    <SerialPortsCard @use="openChannelCreate" />
+
+    <!-- 新建/编辑通道 -->
+    <ChannelFormModal
+      v-if="channelFormOpen"
+      :channel="channelDraft"
+      :initial-port="channelInitialPort"
+      @close="channelFormOpen = false"
+      @remove="requestChannelDelete"
+    />
+
+    <!-- 扫描从站 -->
+    <ChannelScanModal
+      v-if="scanChannel"
+      :channel="scanChannel"
+      @close="scanChannel = null"
+      @pick="addDeviceFromScan"
+    />
 
     <!-- 添加设备 -->
     <ModalShell v-if="showForm" title="添加设备" subtitle="设备 ID 是 tag 前缀，添加后不可与已有设备重复" :width="560" @close="showForm = false">
@@ -309,6 +413,25 @@ onMounted(() => {
       <template #footer>
         <n-button size="small" @click="pendingDelete = null">取消</n-button>
         <n-button size="small" type="error" :loading="deleting" @click="doDelete">删除</n-button>
+      </template>
+    </ModalShell>
+
+    <!-- 删除通道（连带从站） -->
+    <ModalShell
+      v-if="pendingChannelDelete"
+      title="删除通道"
+      :width="440"
+      @close="pendingChannelDelete = null"
+    >
+      <p>
+        确认删除通道 <b class="mono">{{ pendingChannelDelete.id }}</b>（{{ pendingChannelDelete.port }}）？
+      </p>
+      <p class="text-warn mt-8">
+        挂在该通道下的 {{ project.devicesOn(pendingChannelDelete.id).length }} 台设备会一并删除，且不可撤销。
+      </p>
+      <template #footer>
+        <n-button size="small" @click="pendingChannelDelete = null">取消</n-button>
+        <n-button size="small" type="error" :loading="deletingChannel" @click="doDeleteChannel">删除</n-button>
       </template>
     </ModalShell>
   </div>

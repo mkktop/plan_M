@@ -47,6 +47,32 @@
         "unit": { "type": "string" },
         "access": { "enum": ["r", "rw"], "default": "r" },
         "pollGroup": { "type": "string" },
+        "min": {
+          "type": "number",
+          "description": "写值下限（工程量，含）；仅字区域点可用"
+        },
+        "max": {
+          "type": "number",
+          "description": "写值上限（工程量，含）；仅字区域点可用"
+        },
+        "step": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "写值步长（工程量）"
+        },
+        "enum": {
+          "type": "array",
+          "description": "枚举写值表；仅整数类型，value 按工程量口径",
+          "items": {
+            "type": "object",
+            "required": ["value", "label"],
+            "properties": {
+              "value": { "type": "integer" },
+              "label": { "type": "string", "minLength": 1 }
+            },
+            "additionalProperties": false
+          }
+        },
         "bits": {
           "type": "object",
           "description": "状态字位展开：位号(0-15) → 定义；生成 <point>.b<N> 子 tag",

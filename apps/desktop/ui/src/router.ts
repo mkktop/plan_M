@@ -16,14 +16,14 @@ export const router = createRouter({
       meta: { title: '诊断' },
     },
     {
+      // 全局仪表盘已撤出导航（跨设备组态后续再做）；组件仍在设备工作区里使用
       path: '/dashboard',
-      component: () => import('@/pages/DashboardPage.vue'),
-      meta: { title: '仪表盘' },
+      redirect: '/home',
     },
     {
+      // 通道已并入设备页（按总线分组），保留旧路径避免历史链接失效
       path: '/channels',
-      component: () => import('@/pages/ChannelsPage.vue'),
-      meta: { title: '通道' },
+      redirect: '/devices',
     },
     {
       path: '/devices',
@@ -51,9 +51,15 @@ export const router = createRouter({
       meta: { title: '设备工作区' },
     },
     {
+      // 全局实时点表并入诊断页的「数据浏览」标签；保留旧路径与 ?device= 深链
       path: '/tags',
-      component: () => import('@/pages/TagsPage.vue'),
-      meta: { title: '实时点表' },
+      redirect: (to) => ({
+        path: '/diagnostics',
+        query: {
+          tab: 'data',
+          ...(typeof to.query.device === 'string' ? { device: to.query.device } : {}),
+        },
+      }),
     },
     {
       path: '/settings',

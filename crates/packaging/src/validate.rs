@@ -5,7 +5,95 @@ use hmi_domain::points::PointsTable;
 
 /// 宿主提供的设备页面组件白名单。设备包只能用这些 kind；
 /// 增删组件需同步宿主 `ui/src/utils/devicePages.ts` 与 `workspaces.rs` 校验。
-pub const ALLOWED_DEVICE_PAGE_COMPONENTS: &[&str] = &["overview", "dashboard", "tags", "settings"];
+/// 新组件使用带命名空间的形式（`core:value`），裸名作为 v1 兼容别名。
+pub const ALLOWED_DEVICE_PAGE_COMPONENTS: &[&str] = &[
+    "overview",
+    "dashboard",
+    "tags",
+    "settings",
+    "value",
+    "gauge",
+    "switch",
+    "input",
+    "bits",
+    "core:value",
+    "core:gauge",
+    "core:switch",
+    "core:input",
+    "core:bits",
+];
+
+/// 需要 `value` 槽位的显示/写入型组件：缺省时只提示，不拦截。
+const VALUE_SLOT_WIDGET_KINDS: &[&str] = &[
+    "value",
+    "gauge",
+    "switch",
+    "input",
+    "bits",
+    "core:value",
+    "core:gauge",
+    "core:switch",
+    "core:input",
+    "core:bits",
+];
+
+/// 页面网格列数（与仪表盘一致）。
+pub const PAGE_GRID_COLS: u32 = 12;
+/// 绝对定位页面的最大行数（防止 y 值异常）。
+const MAX_PAGE_ROWS: u32 = 200;
+
+/// 校验一组组件 rect：整页要么全部声明、要么全部省略；越界/重叠均报错。
+///
+/// `rects` 与页面组件一一对应，`None` 表示该组件走流式布局。
+pub fn validate_component_rects(
+    page_id: &str,
+    rects: &[Option<(u32, u32, u32, u32)>],
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    let declared = rects.iter().filter(|r| r.is_some()).count();
+    if declared > 0 && declared != rects.len() {
+        errors.push(format!(
+            "页面 `{page_id}`：rect 必须全部组件都声明或全部省略（当前 {declared}/{}）",
+            rects.len()
+        ));
+        return errors;
+    }
+    if declared == 0 {
+        return errors;
+    }
+
+    let mut placed: Vec<(usize, (u32, u32, u32, u32))> = Vec::new();
+    for (i, rect) in rects.iter().enumerate() {
+        let Some((x, y, w, h)) = *rect else {
+            continue;
+        };
+        if w == 0 || h == 0 {
+            errors.push(format!(
+                "页面 `{page_id}`：组件 #{i} 的 rect 宽高必须大于 0"
+            ));
+            continue;
+        }
+        if x >= PAGE_GRID_COLS || x + w > PAGE_GRID_COLS {
+            errors.push(format!(
+                "页面 `{page_id}`：组件 #{i} 的 rect 横向越界（x={x}, w={w}，共 {PAGE_GRID_COLS} 列）"
+            ));
+        }
+        if y + h > MAX_PAGE_ROWS {
+            errors.push(format!(
+                "页面 `{page_id}`：组件 #{i} 的 rect 纵向越界（y={y}, h={h}）"
+            ));
+        }
+        for (j, (px, py, pw, ph)) in &placed {
+            if x < px + pw && *px < x + w && y < py + ph && *py < y + h {
+                errors.push(format!(
+                    "页面 `{page_id}`：组件 #{i} 与组件 #{j} 的 rect 重叠"
+                ));
+            }
+        }
+        placed.push((i, (x, y, w, h)));
+    }
+    errors
+}
 
 const MAX_UI_PAGES: usize = 50;
 const MAX_PAGE_COMPONENTS: usize = 20;
@@ -37,7 +125,7 @@ impl ValidationIssues {
 pub fn validate_package(manifest: &PackageManifest, table: &PointsTable) -> ValidationIssues {
     let mut v = ValidationIssues::default();
     validate_manifest(manifest, &mut v);
-    validate_ui(manifest, &mut v);
+    validate_ui(manifest, table, &mut v);
     validate_points(table, &mut v);
     v
 }
@@ -73,7 +161,7 @@ fn validate_manifest(m: &PackageManifest, v: &mut ValidationIssues) {
 }
 
 /// 校验设备包声明的默认工作区页面与宿主组件引用。
-fn validate_ui(m: &PackageManifest, v: &mut ValidationIssues) {
+fn validate_ui(m: &PackageManifest, t: &PointsTable, v: &mut ValidationIssues) {
     if m.ui.pages.len() > MAX_UI_PAGES {
         v.error(format!("ui.pages 最多 {MAX_UI_PAGES} 页"));
     }
@@ -106,6 +194,14 @@ fn validate_ui(m: &PackageManifest, v: &mut ValidationIssues) {
         if page.components.len() > MAX_PAGE_COMPONENTS {
             v.error(format!("{ctx}：组件最多 {MAX_PAGE_COMPONENTS} 个"));
         }
+        let rects: Vec<Option<(u32, u32, u32, u32)>> = page
+            .components
+            .iter()
+            .map(|c| c.rect.map(|r| (r.x, r.y, r.w, r.h)))
+            .collect();
+        for e in validate_component_rects(&page.id, &rects) {
+            v.error(e);
+        }
         for comp in &page.components {
             if !ALLOWED_DEVICE_PAGE_COMPONENTS.contains(&comp.kind.as_str()) {
                 v.error(format!(
@@ -122,6 +218,55 @@ fn validate_ui(m: &PackageManifest, v: &mut ValidationIssues) {
                     "{ctx}：组件 `{}` 的 config 必须是 JSON 对象",
                     comp.kind
                 ));
+            }
+            validate_bindings(&ctx, comp, t, v);
+            if VALUE_SLOT_WIDGET_KINDS.contains(&comp.kind.as_str())
+                && comp.bind.get("value").is_none()
+            {
+                v.warn(format!(
+                    "{ctx}：组件 `{}` 未绑定 value 槽位（浏览时显示空态）",
+                    comp.kind
+                ));
+            }
+        }
+    }
+}
+
+/// 校验页面组件的绑定：包内只允许相对点绑定，点/位必须存在于点表。
+fn validate_bindings(
+    ctx: &str,
+    comp: &crate::manifest::UiComponentDecl,
+    t: &PointsTable,
+    v: &mut ValidationIssues,
+) {
+    for (slot, b) in &comp.bind {
+        let bctx = format!("{ctx}：组件 `{}` 槽位 `{slot}`", comp.kind);
+        if slot.trim().is_empty() {
+            v.error(format!("{ctx}：组件 `{}` 存在空槽位名", comp.kind));
+            continue;
+        }
+        let has_point = b.point.as_deref().is_some_and(|s| !s.trim().is_empty());
+        let has_tag = b.tag.as_deref().is_some_and(|s| !s.trim().is_empty());
+        if has_point == has_tag {
+            v.error(format!("{bctx}：必须且只能声明 point 或 tag 之一"));
+            continue;
+        }
+        if has_tag {
+            v.error(format!(
+                "{bctx}：设备包页面不允许绝对 tag 绑定（跨设备绑定仅用户页面可用）"
+            ));
+            continue;
+        }
+        let point_id = b.point.as_deref().unwrap_or_default();
+        let Some(point) = t.point(point_id) else {
+            v.error(format!("{bctx}：点 `{point_id}` 不在点表中"));
+            continue;
+        };
+        if let Some(bit) = b.bit {
+            if point.is_bit_point() {
+                v.error(format!("{bctx}：位区域点 `{point_id}` 不支持 bit 绑定"));
+            } else if !point.bits.contains_key(&bit) {
+                v.error(format!("{bctx}：点 `{point_id}` 没有位 {bit} 的定义"));
             }
         }
     }
@@ -218,6 +363,48 @@ fn validate_points(t: &PointsTable, v: &mut ValidationIssues) {
 
         if p.scale == Some(0.0) {
             v.error(format!("{ctx}：scale 为 0（非法换算）"));
+        }
+
+        // 写值元数据：边界/步长/枚举都按工程量口径解释
+        if p.is_bit_point() {
+            if p.min.is_some() || p.max.is_some() || p.step.is_some() || !p.value_enum.is_empty() {
+                v.error(format!("{ctx}：位区域点不支持 min/max/step/enum"));
+            }
+        } else {
+            if let (Some(lo), Some(hi)) = (p.min, p.max) {
+                if lo > hi {
+                    v.error(format!("{ctx}：min({lo}) 不能大于 max({hi})"));
+                }
+            }
+            if p.min.is_some_and(|x| !x.is_finite()) || p.max.is_some_and(|x| !x.is_finite()) {
+                v.error(format!("{ctx}：min/max 必须是有限数值"));
+            }
+            if let Some(step) = p.step {
+                if !step.is_finite() || step <= 0.0 {
+                    v.error(format!("{ctx}：step 必须大于 0"));
+                }
+            }
+            if !p.value_enum.is_empty() {
+                if !p.data_type.is_integer() {
+                    v.error(format!(
+                        "{ctx}：enum 仅支持整数类型（当前 {}）",
+                        p.data_type.as_str()
+                    ));
+                }
+                let mut enum_values = std::collections::HashSet::new();
+                for e in &p.value_enum {
+                    if e.label.trim().is_empty() {
+                        v.error(format!("{ctx}：enum 项 value={} 的 label 为空", e.value));
+                    }
+                    if !enum_values.insert(e.value) {
+                        v.error(format!("{ctx}：enum value={} 重复", e.value));
+                    }
+                    let ev = e.value as f64;
+                    if p.min.is_some_and(|lo| ev < lo) || p.max.is_some_and(|hi| ev > hi) {
+                        v.error(format!("{ctx}：enum value={} 超出 [min,max]", e.value));
+                    }
+                }
+            }
         }
 
         if p.data_type.word_count() > 1 && p.byte_order.is_none() {
@@ -358,6 +545,118 @@ mod tests {
         }))
         .unwrap();
         let v = validate_package(&m, &PointsTable::default());
+        assert!(v.ok(), "{v:?}");
+    }
+
+    #[test]
+    fn ui_relative_bindings_validated() {
+        let t = points_json(serde_json::json!({
+            "points": [
+                { "id": "uab", "register": "40101", "type": "u16" },
+                { "id": "status", "register": "40300", "type": "u16",
+                  "bits": { "0": { "name": "运行" } } }
+            ]
+        }));
+        let mut m = manifest();
+        m.ui = serde_json::from_value(serde_json::json!({
+            "pages": [
+                { "id": "monitor", "title": "监测", "components": [
+                    { "kind": "core:value", "bind": { "value": { "point": "uab" } } },
+                    { "kind": "core:value", "bind": { "value": { "point": "status", "bit": 0 } } },
+                    { "kind": "core:gauge", "bind": { "value": { "point": "nope" } } },
+                    { "kind": "core:value", "bind": { "value": { "tag": "pm1.uab" } } },
+                    { "kind": "core:value", "bind": { "value": { "point": "status", "bit": 3 } } }
+                ] }
+            ]
+        }))
+        .unwrap();
+        let v = validate_package(&m, &t);
+        assert!(!v.ok());
+        assert!(v.errors.iter().any(|e| e.contains("不在点表")), "{v:?}");
+        assert!(v.errors.iter().any(|e| e.contains("绝对 tag")), "{v:?}");
+        assert!(v.errors.iter().any(|e| e.contains("没有位 3")), "{v:?}");
+    }
+
+    #[test]
+    fn write_metadata_validated() {
+        let t = points_json(serde_json::json!({
+            "points": [
+                { "id": "mode", "register": "40311", "type": "u16", "access": "rw",
+                  "min": 0, "max": 2, "step": 1,
+                  "enum": [ { "value": 0, "label": "自动" }, { "value": 1, "label": "手动" } ] },
+                { "id": "bad", "register": "40312", "type": "f32", "access": "rw",
+                  "min": 5, "max": 1, "step": 0,
+                  "enum": [ { "value": 0, "label": "" } ] },
+                { "id": "coil", "register": "00010", "min": 0 }
+            ]
+        }));
+        let v = validate_package(&manifest(), &t);
+        assert!(!v.ok());
+        assert!(
+            v.errors
+                .iter()
+                .any(|e| e.contains("min(5) 不能大于 max(1)")),
+            "{v:?}"
+        );
+        assert!(
+            v.errors.iter().any(|e| e.contains("step 必须大于 0")),
+            "{v:?}"
+        );
+        assert!(
+            v.errors.iter().any(|e| e.contains("enum 仅支持整数类型")),
+            "{v:?}"
+        );
+        assert!(v.errors.iter().any(|e| e.contains("label 为空")), "{v:?}");
+        assert!(
+            v.errors.iter().any(|e| e.contains("位区域点不支持")),
+            "{v:?}"
+        );
+    }
+
+    #[test]
+    fn component_rects_validated() {
+        let mut m = manifest();
+        m.ui = serde_json::from_value(serde_json::json!({
+            "pages": [
+                { "id": "grid", "title": "网格", "components": [
+                    { "kind": "core:value", "rect": { "x": 0, "y": 0, "w": 3, "h": 2 } },
+                    { "kind": "core:value", "rect": { "x": 3, "y": 0, "w": 3, "h": 2 } }
+                ] },
+                { "id": "partial", "title": "半网格", "components": [
+                    { "kind": "core:value", "rect": { "x": 0, "y": 0, "w": 3, "h": 2 } },
+                    { "kind": "core:value" }
+                ] },
+                { "id": "oob", "title": "越界", "components": [
+                    { "kind": "core:value", "rect": { "x": 10, "y": 0, "w": 4, "h": 2 } }
+                ] },
+                { "id": "overlap", "title": "重叠", "components": [
+                    { "kind": "core:value", "rect": { "x": 0, "y": 0, "w": 6, "h": 2 } },
+                    { "kind": "core:gauge", "rect": { "x": 3, "y": 0, "w": 6, "h": 2 } }
+                ] }
+            ]
+        }))
+        .unwrap();
+        let v = validate_package(&m, &PointsTable::default());
+        assert_eq!(v.errors.len(), 3, "{v:?}");
+        assert!(
+            v.errors.iter().any(|e| e.contains("全部组件都声明")),
+            "{v:?}"
+        );
+        assert!(v.errors.iter().any(|e| e.contains("横向越界")), "{v:?}");
+        assert!(v.errors.iter().any(|e| e.contains("rect 重叠")), "{v:?}");
+        assert!(!v.errors.iter().any(|e| e.contains("`grid`")), "{v:?}");
+    }
+
+    #[test]
+    fn valid_write_metadata_passes() {
+        let t = points_json(serde_json::json!({
+            "points": [
+                { "id": "mode", "register": "40311", "type": "u16", "access": "rw",
+                  "min": 0, "max": 2, "step": 1,
+                  "enum": [ { "value": 0, "label": "自动" }, { "value": 2, "label": "停止" } ] }
+            ]
+        }));
+        let v = validate_package(&manifest(), &t);
         assert!(v.ok(), "{v:?}");
     }
 }

@@ -50,8 +50,10 @@ const props = withDefaults(
   defineProps<{
     embedded?: boolean
     deviceId?: string
+    /** 嵌在诊断页的标签里：不要自己的页头，但保留设备选择侧栏。 */
+    hideHeader?: boolean
   }>(),
-  { embedded: false, deviceId: '' },
+  { embedded: false, deviceId: '', hideHeader: false },
 )
 
 const selectedId = ref('')
@@ -165,7 +167,12 @@ watch(
       initialQueryApplied = true
       const q = props.deviceId || route.query.device
       if (typeof q === 'string' && list.some((d) => d.id === q)) selectedId.value = q
-      if (!props.embedded && q) void router.replace({ query: {} })
+      if (!props.embedded && q) {
+        // 只清掉 device，别把宿主的其他 query（如诊断页的 tab）一起抹掉
+        const rest = { ...route.query }
+        delete rest.device
+        void router.replace({ query: rest })
+      }
     }
     if (props.deviceId && list.some((d) => d.id === props.deviceId)) {
       selectedId.value = props.deviceId
@@ -242,14 +249,14 @@ function gotoDevices(): void {
 <template>
   <div class="page tags-page" :class="{ embedded }">
     <PageHeader
-      v-if="!embedded"
+      v-if="!embedded && !hideHeader"
       title="实时点表"
       subtitle="只订阅当前设备的点位；质量戳随每个值下发"
     >
       <span class="live-badge"><span class="live-dot" />LIVE</span>
     </PageHeader>
 
-    <div v-if="!conn.connected && !embedded" class="banner warn">
+    <div v-if="!conn.connected && !embedded && !hideHeader" class="banner warn">
       <AppIcon name="alert" :size="16" />
       <span>未连接 gatewayd，点表不会更新。</span>
       <n-button size="tiny" quaternary @click="router.push('/diagnostics')">去连接</n-button>

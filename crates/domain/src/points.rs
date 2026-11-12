@@ -66,6 +66,29 @@ pub struct PointDef {
     /// 状态字位展开：位号 → 定义。生成 `<point>.b<N>` 子 tag。
     #[serde(default)]
     pub bits: BTreeMap<u8, BitDef>,
+    /// 写值下限（工程量，含）；None = 不限制
+    #[serde(default)]
+    pub min: Option<f64>,
+    /// 写值上限（工程量，含）；None = 不限制
+    #[serde(default)]
+    pub max: Option<f64>,
+    /// 写值步长（工程量）；None = 不限制
+    #[serde(default)]
+    pub step: Option<f64>,
+    /// 枚举写值表（仅整数类型；值按工程量口径）
+    #[serde(rename = "enum", default, skip_serializing_if = "Vec::is_empty")]
+    pub value_enum: Vec<EnumValueDef>,
+}
+
+/// 枚举点的一个可取项（写值下拉/按钮用）。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnumValueDef {
+    /// 工程量取值（与 min/max 同口径，不乘 scale）
+    pub value: i64,
+    /// 显示文案（可中文）
+    #[serde(default)]
+    pub label: String,
 }
 
 /// 读写属性。
@@ -202,6 +225,26 @@ mod tests {
     }
 
     #[test]
+    fn parse_write_metadata() {
+        let j = r#"
+        {
+          "points": [
+            { "id": "mode", "register": "40311", "type": "u16", "access": "rw",
+              "min": 0, "max": 2, "step": 1,
+              "enum": [ { "value": 0, "label": "自动" }, { "value": 1, "label": "手动" } ] }
+          ]
+        }"#;
+        let t: PointsTable = serde_json::from_str(j).unwrap();
+        let p = t.point("mode").unwrap();
+        assert_eq!(p.min, Some(0.0));
+        assert_eq!(p.max, Some(2.0));
+        assert_eq!(p.step, Some(1.0));
+        assert_eq!(p.value_enum.len(), 2);
+        assert_eq!(p.value_enum[1].value, 1);
+        assert_eq!(p.value_enum[1].label, "手动");
+    }
+
+    #[test]
     fn resolved_byte_order_chain() {
         let mut p = PointDef {
             id: "x".into(),
@@ -215,6 +258,10 @@ mod tests {
             access: Access::R,
             poll_group: None,
             bits: BTreeMap::new(),
+            min: None,
+            max: None,
+            step: None,
+            value_enum: Vec::new(),
         };
         let defaults = ProtocolDefaults {
             byte_order: Some(ByteOrder::Cdab),

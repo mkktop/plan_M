@@ -73,10 +73,8 @@ const stats = computed(() => [
 ])
 
 const actions = [
-  { path: '/dashboard', label: '打开仪表盘', desc: '查看已组态的实时视图', icon: 'layout' },
-  { path: '/tags', label: '实时点表', desc: '浏览在线值、质量与写点', icon: 'grid' },
-  { path: '/devices', label: '管理设备', desc: '添加从站、查看在线状态', icon: 'chip' },
-  { path: '/channels', label: '配置通道', desc: '串口参数与从站扫描', icon: 'plug' },
+  { path: '/devices', label: '管理设备', desc: '总线、从站与扫描', icon: 'chip' },
+  { path: '/diagnostics?tab=data', label: '数据浏览', desc: '跨设备实时值、质量与写值', icon: 'grid' },
   { path: '/packages', label: '设备包', desc: '导入新型号与点表', icon: 'package' },
   { path: '/plugins', label: 'UI 插件', desc: '扩展仪表盘组件与页面', icon: 'plugin' },
 ]
@@ -102,13 +100,13 @@ function packageName(id: string): string {
           <template v-else>正在等待 gatewayd 连接，采集进程未就绪。</template>
         </p>
         <div class="home-hero-actions">
-          <n-button size="medium" type="primary" @click="router.push('/dashboard')">
-            <template #icon><AppIcon name="layout" :size="16" /></template>
-            打开仪表盘
+          <n-button size="medium" type="primary" @click="router.push('/devices')">
+            <template #icon><AppIcon name="chip" :size="16" /></template>
+            管理设备
           </n-button>
-          <n-button size="medium" @click="router.push('/tags')">
+          <n-button size="medium" @click="router.push('/diagnostics?tab=data')">
             <template #icon><AppIcon name="grid" :size="16" /></template>
-            实时点表
+            数据浏览
           </n-button>
         </div>
       </div>

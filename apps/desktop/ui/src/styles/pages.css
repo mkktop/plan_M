@@ -1659,6 +1659,214 @@
   text-transform: uppercase;
 }
 
+/* 设备页里的显示型小组件：连续声明时合并为自适应网格。 */
+.ws-widget-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+  min-width: 0;
+}
+
+/* 12 列绝对网格（组件声明 rect 时启用；行高与仪表盘单位不同，页面用紧凑档）。 */
+.ws-widget-canvas {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-auto-rows: 72px;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ws-canvas-item {
+  grid-column: calc(var(--wx) + 1) / span var(--ww);
+  grid-row: calc(var(--wy) + 1) / span var(--wh);
+  min-width: 0;
+  min-height: 0;
+}
+
+.ws-canvas-item > .dev-widget {
+  height: 100%;
+  min-height: 0;
+}
+
+.ws-canvas-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  min-height: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  overflow: auto;
+}
+
+@media (max-width: 900px) {
+  .ws-widget-canvas {
+    grid-auto-rows: auto;
+  }
+
+  .ws-canvas-item {
+    grid-column: 1 / -1 !important;
+    grid-row: auto !important;
+  }
+}
+
+.dev-widget {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  min-height: 132px;
+  padding: 12px 14px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent), var(--bg-2);
+}
+
+.dev-widget.unbound {
+  border-style: dashed;
+}
+
+.dev-widget-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dev-widget-title {
+  color: var(--text-1);
+  font-size: 12px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dev-widget-meta {
+  color: var(--text-3);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dev-widget-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 0;
+}
+
+.dev-widget-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.dev-widget .gauge-body {
+  justify-content: space-between;
+}
+
+.dev-widget .gauge-wrap {
+  flex: 1;
+  justify-content: center;
+}
+
+/* 输入型小组件 */
+.dev-input-body {
+  gap: 8px;
+  justify-content: center;
+}
+
+.dev-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.dev-input-row .n-select,
+.dev-input-row .n-input-number {
+  flex: 1;
+  min-width: 0;
+}
+
+.dev-input-hint {
+  line-height: 1.45;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dev-dirty {
+  color: var(--warn);
+}
+
+/* 状态位小组件 */
+.bits-body {
+  justify-content: center;
+}
+
+.bits-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 100%;
+  overflow: auto;
+}
+
+.bits-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.bits-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--lost);
+}
+
+.bits-dot.on {
+  background: var(--good);
+  box-shadow: 0 0 6px rgba(53, 211, 153, 0.5);
+}
+
+.bits-dot.q-bad.on,
+.bits-dot.q-comm_lost.on {
+  background: var(--warn);
+  box-shadow: none;
+}
+
+.bits-name {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bits-state {
+  color: var(--text-3);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.bits-state.on {
+  color: var(--good);
+}
+
 /* 嵌入模式：页面组件的根容器不再占满整行内边距。 */
 .tags-page.embedded {
   gap: 12px;
@@ -1901,6 +2109,25 @@
 
 .component-row-head .n-input {
   flex: 1;
+}
+
+.component-rect-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rect-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-3);
+  font-size: 10px;
+}
+
+.rect-field .n-input-number {
+  width: 64px;
 }
 
 .component-row-tools {

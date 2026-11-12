@@ -324,6 +324,10 @@ mod tests {
             access: Access::R,
             poll_group: None,
             bits: BTreeMap::new(),
+            min: None,
+            max: None,
+            step: None,
+            value_enum: Vec::new(),
         }
     }
 

@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { NButton } from 'naive-ui'
 import PageHeader from '@/components/PageHeader.vue'
 import AppIcon from '@/components/AppIcon.vue'
+import TagsPage from '@/pages/TagsPage.vue'
 import { gateway } from '@/api/ws'
 import { useConnectionStore } from '@/stores/connection'
 import { useProjectStore } from '@/stores/project'
@@ -12,10 +13,22 @@ import { useToastStore } from '@/stores/toast'
 import { formatClock } from '@/utils/format'
 
 const router = useRouter()
+const route = useRoute()
 const conn = useConnectionStore()
 const project = useProjectStore()
 const tags = useTagsStore()
 const toast = useToastStore()
+
+// 诊断页 = 连接与健康 + 数据浏览（原全局实时点表：跨设备看值/质量/写值）。
+type DiagTab = 'health' | 'data'
+const tab = computed<DiagTab>(() => (route.query.tab === 'data' ? 'data' : 'health'))
+
+function setTab(next: DiagTab): void {
+  const query = { ...route.query }
+  if (next === 'data') query.tab = 'data'
+  else delete query.tab
+  void router.replace({ query })
+}
 
 // 模板里统一走这层别名（Volar 对 class 实例上的 reactive 字段做 ref 解包时类型会跑偏）。
 const gs = gateway.state
@@ -107,7 +120,7 @@ watch(
 
 <template>
   <div class="page">
-    <PageHeader title="诊断" subtitle="连接 gatewayd 采集进程，检查链路与实时数据健康度">
+    <PageHeader title="诊断" subtitle="连接与链路健康、通信日志，以及跨设备实时数据浏览">
       <n-button size="small" @click="router.push('/settings')">
         <template #icon><AppIcon name="settings" :size="15" /></template>
         连接设置
@@ -118,6 +131,30 @@ watch(
       </n-button>
     </PageHeader>
 
+    <div class="seg-tabs" role="tablist">
+      <button
+        type="button"
+        role="tab"
+        class="seg-tab"
+        :class="{ active: tab === 'health' }"
+        :aria-selected="tab === 'health'"
+        @click="setTab('health')"
+      >
+        连接与健康
+      </button>
+      <button
+        type="button"
+        role="tab"
+        class="seg-tab"
+        :class="{ active: tab === 'data' }"
+        :aria-selected="tab === 'data'"
+        @click="setTab('data')"
+      >
+        数据浏览
+      </button>
+    </div>
+
+    <template v-if="tab === 'health'">
     <div class="grid-2">
       <section class="card conn-card">
         <div class="conn-hero">
@@ -226,5 +263,8 @@ watch(
         <div v-if="gs.logs.length === 0" class="log-empty muted">暂无消息</div>
       </div>
     </section>
+    </template>
+
+    <TagsPage v-else hide-header />
   </div>
 </template>

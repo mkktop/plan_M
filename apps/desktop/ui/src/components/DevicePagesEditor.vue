@@ -8,8 +8,9 @@ import { errorMessage, useToastStore } from '@/stores/toast'
 import {
   HOST_DEVICE_COMPONENTS,
   clonePages,
+  defaultWidgetSize,
 } from '@/utils/devicePages'
-import type { DevicePageDto } from '@/api/types'
+import type { BindingDecl, DevicePageDto, WidgetRect } from '@/api/types'
 
 const props = defineProps<{
   typeId: string
@@ -26,6 +27,8 @@ const toast = useToastStore()
 interface EditorComponent {
   kind: string
   title: string
+  bindText: string
+  rect: WidgetRect | null
   configText: string
 }
 
@@ -44,6 +47,8 @@ function toEditor(pages: DevicePageDto[]): EditorPage[] {
     components: p.components.map((c) => ({
       kind: c.kind,
       title: c.title || '',
+      bindText: c.bind && Object.keys(c.bind).length ? JSON.stringify(c.bind, null, 2) : '',
+      rect: c.rect ? { ...c.rect } : null,
       configText: c.config && Object.keys(c.config).length ? JSON.stringify(c.config, null, 2) : '',
     })),
   }))
@@ -86,7 +91,7 @@ function addPage(): void {
     id: nextPageId(),
     title: `新页面 ${draft.value.length + 1}`,
     icon: 'grid',
-    components: [{ kind: 'overview', title: '', configText: '' }],
+    components: [{ kind: 'overview', title: '', bindText: '', rect: null, configText: '' }],
   }
   draft.value.push(page)
   selectedId.value = page.id
@@ -114,7 +119,46 @@ function movePage(page: EditorPage, delta: number): void {
 function addComponent(): void {
   const page = selectedPage.value
   if (!page) return
-  page.components.push({ kind: 'overview', title: '', configText: '' })
+  const grid = pageGrid.value
+  const kind = grid ? 'core:value' : 'overview'
+  const size = defaultWidgetSize(kind)
+  const rect = grid ? { x: 0, y: nextRow(page.components), ...size } : null
+  page.components.push({ kind, title: '', bindText: '', rect, configText: '' })
+}
+
+const pageGrid = computed(
+  () => selectedPage.value?.components.some((c) => c.rect) ?? false,
+)
+
+function nextRow(components: EditorComponent[]): number {
+  return components.reduce((max, c) => Math.max(max, c.rect ? c.rect.y + c.rect.h : 0), 0)
+}
+
+function setPageLayout(mode: 'grid' | 'flow'): void {
+  const page = selectedPage.value
+  if (!page) return
+  if (mode === 'flow') {
+    page.components.forEach((c) => {
+      c.rect = null
+    })
+    return
+  }
+  let y = 0
+  page.components.forEach((c) => {
+    const size = defaultWidgetSize(c.kind)
+    c.rect = { x: 0, y, ...size }
+    y += size.h
+  })
+}
+
+function ensureRect(comp: EditorComponent): WidgetRect {
+  if (!comp.rect) comp.rect = { x: 0, y: nextRow(selectedPage.value?.components ?? []), w: 3, h: 2 }
+  return comp.rect
+}
+
+function setRect(comp: EditorComponent, key: keyof WidgetRect, value: number | null): void {
+  const rect = ensureRect(comp)
+  rect[key] = Math.max(0, Math.round(value ?? 0))
 }
 
 function removeComponent(index: number): void {
@@ -136,19 +180,76 @@ function moveComponent(index: number, delta: number): void {
   page.components.splice(j, 0, c)
 }
 
-function parseConfig(text: string): Record<string, unknown> | null {
+function parseObject(text: string, label: string): Record<string, unknown> | null {
   const t = text.trim()
   if (!t) return null
   let parsed: unknown
   try {
     parsed = JSON.parse(t)
   } catch (e) {
-    throw new Error(`组件配置不是合法 JSON：${errorMessage(e)}`)
+    throw new Error(`${label}不是合法 JSON：${errorMessage(e)}`)
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('组件配置必须是 JSON 对象')
+    throw new Error(`${label}必须是 JSON 对象`)
   }
   return parsed as Record<string, unknown>
+}
+
+function parseConfig(text: string): Record<string, unknown> | null {
+  return parseObject(text, '组件配置 config ')
+}
+
+/** 绑定：槽位 → { point, bit } 或 { tag }。 */
+function parseBind(text: string): Record<string, BindingDecl> | null {
+  const obj = parseObject(text, '组件绑定 bind ')
+  if (!obj) return null
+  const out: Record<string, BindingDecl> = {}
+  for (const [slot, decl] of Object.entries(obj)) {
+    if (!slot.trim()) throw new Error('绑定槽位名不能为空')
+    if (!decl || typeof decl !== 'object' || Array.isArray(decl)) {
+      throw new Error(`槽位 ${slot} 的绑定必须是对象`)
+    }
+    const d = decl as Record<string, unknown>
+    const point = typeof d.point === 'string' ? d.point.trim() : ''
+    const tag = typeof d.tag === 'string' ? d.tag.trim() : ''
+    const bit =
+      typeof d.bit === 'number' && Number.isInteger(d.bit) ? d.bit : undefined
+    if (Boolean(point) === Boolean(tag)) {
+      throw new Error(`槽位 ${slot}：point 与 tag 必须且只能填一个`)
+    }
+    if (bit !== undefined && !point) {
+      throw new Error(`槽位 ${slot}：bit 只能与 point 组合`)
+    }
+    out[slot] = {
+      ...(point ? { point } : {}),
+      ...(bit !== undefined ? { bit } : {}),
+      ...(tag ? { tag } : {}),
+    }
+  }
+  return out
+}
+
+function validateRects(comps: EditorComponent[], pageTitle: string): void {
+  const withRect = comps.filter((c) => c.rect).length
+  if (withRect === 0) return
+  if (withRect !== comps.length) {
+    throw new Error(`页面「${pageTitle}」：网格布局要求每个组件都有 rect，或整页切回流式布局`)
+  }
+  const placed: { x: number; y: number; w: number; h: number; i: number }[] = []
+  for (const [i, c] of comps.entries()) {
+    const r = c.rect
+    if (!r) continue
+    if (r.w < 1 || r.h < 1) throw new Error(`页面「${pageTitle}」的组件 #${i + 1}：宽高必须大于 0`)
+    if (r.x < 0 || r.y < 0 || r.x + r.w > 12) {
+      throw new Error(`页面「${pageTitle}」的组件 #${i + 1}：横向超出 12 列`)
+    }
+    for (const p of placed) {
+      if (r.x < p.x + p.w && p.x < r.x + r.w && r.y < p.y + p.h && p.y < r.y + r.h) {
+        throw new Error(`页面「${pageTitle}」的组件 #${i + 1} 与组件 #${p.i + 1} 位置重叠`)
+      }
+    }
+    placed.push({ ...r, i })
+  }
 }
 
 function buildPages(): DevicePageDto[] {
@@ -156,6 +257,7 @@ function buildPages(): DevicePageDto[] {
   return draft.value.map((p) => {
     if (!p.title.trim()) throw new Error(`页面 ${p.id} 缺少标题`)
     if (!p.components.length) throw new Error(`页面「${p.title}」至少需要一个组件`)
+    validateRects(p.components, p.title)
     return {
       id: p.id,
       title: p.title.trim(),
@@ -163,6 +265,8 @@ function buildPages(): DevicePageDto[] {
       components: p.components.map((c) => ({
         kind: c.kind,
         title: c.title.trim(),
+        bind: parseBind(c.bindText) ?? undefined,
+        rect: c.rect ? { ...c.rect } : undefined,
         config: parseConfig(c.configText),
       })),
     }
@@ -268,7 +372,11 @@ async function reset(): Promise<void> {
         <div class="component-editor">
           <div class="component-editor-head">
             <span>页面组件</span>
-            <span class="muted small">按顺序纵向渲染，可组合多个</span>
+            <span class="spacer" />
+            <span class="muted small">{{ pageGrid ? '网格布局（12 列）' : '流式布局' }}</span>
+            <n-button size="tiny" quaternary @click="setPageLayout(pageGrid ? 'flow' : 'grid')">
+              {{ pageGrid ? '切回流式' : '切到网格' }}
+            </n-button>
           </div>
 
           <div
@@ -291,12 +399,67 @@ async function reset(): Promise<void> {
                 </span>
               </span>
             </div>
-            <n-input
-              v-model:value="comp.configText"
-              type="textarea"
-              :autosize="{ minRows: 2, maxRows: 6 }"
-              placeholder="组件 config（JSON，可空）"
-            />
+            <div v-if="pageGrid" class="component-rect-row">
+              <span class="muted small">网格位置（0 基）</span>
+              <label class="rect-field">
+                x
+                <n-input-number
+                  :value="comp.rect?.x ?? 0"
+                  size="tiny"
+                  :min="0"
+                  :max="11"
+                  @update:value="(v: number | null) => setRect(comp, 'x', v)"
+                />
+              </label>
+              <label class="rect-field">
+                y
+                <n-input-number
+                  :value="comp.rect?.y ?? 0"
+                  size="tiny"
+                  :min="0"
+                  @update:value="(v: number | null) => setRect(comp, 'y', v)"
+                />
+              </label>
+              <label class="rect-field">
+                w
+                <n-input-number
+                  :value="comp.rect?.w ?? 3"
+                  size="tiny"
+                  :min="1"
+                  :max="12"
+                  @update:value="(v: number | null) => setRect(comp, 'w', v)"
+                />
+              </label>
+              <label class="rect-field">
+                h
+                <n-input-number
+                  :value="comp.rect?.h ?? 2"
+                  size="tiny"
+                  :min="1"
+                  @update:value="(v: number | null) => setRect(comp, 'h', v)"
+                />
+              </label>
+            </div>
+            <div class="form-grid">
+              <div class="field">
+                <label>绑定 bind（槽位 → 点/位，JSON）</label>
+                <n-input
+                  v-model:value="comp.bindText"
+                  type="textarea"
+                  :autosize="{ minRows: 2, maxRows: 6 }"
+                  placeholder='{ "value": { "point": "uab" } }'
+                />
+              </div>
+              <div class="field">
+                <label>配置 config（JSON）</label>
+                <n-input
+                  v-model:value="comp.configText"
+                  type="textarea"
+                  :autosize="{ minRows: 2, maxRows: 6 }"
+                  placeholder="组件参数，可空"
+                />
+              </div>
+            </div>
           </div>
 
           <n-button size="small" quaternary @click="addComponent">

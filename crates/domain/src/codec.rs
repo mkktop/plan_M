@@ -88,6 +88,14 @@ impl DataType {
         matches!(self, DataType::Bcd16 | DataType::Bcd32)
     }
 
+    /// 是否为整数类型（枚举点只允许整数类型）。
+    pub fn is_integer(self) -> bool {
+        matches!(
+            self,
+            DataType::U16 | DataType::I16 | DataType::U32 | DataType::I32 | DataType::U64
+        )
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             DataType::U16 => "u16",

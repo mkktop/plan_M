@@ -51,6 +51,10 @@ fn pm_like_table() -> PointsTable {
                 access: Access::R,
                 poll_group: Some("fast".into()),
                 bits: BTreeMap::new(),
+                min: None,
+                max: None,
+                step: None,
+                value_enum: Vec::new(),
             },
             PointDef {
                 id: "energy".into(),
@@ -64,6 +68,10 @@ fn pm_like_table() -> PointsTable {
                 access: Access::R,
                 poll_group: Some("slow".into()),
                 bits: BTreeMap::new(),
+                min: None,
+                max: None,
+                step: None,
+                value_enum: Vec::new(),
             },
             PointDef {
                 id: "status".into(),
@@ -77,6 +85,10 @@ fn pm_like_table() -> PointsTable {
                 access: Access::R,
                 poll_group: Some("fast".into()),
                 bits,
+                min: None,
+                max: None,
+                step: None,
+                value_enum: Vec::new(),
             },
             PointDef {
                 id: "setpoint".into(),
@@ -90,6 +102,10 @@ fn pm_like_table() -> PointsTable {
                 access: Access::Rw,
                 poll_group: None,
                 bits: BTreeMap::new(),
+                min: None,
+                max: None,
+                step: None,
+                value_enum: Vec::new(),
             },
         ],
     }

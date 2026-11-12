@@ -5,14 +5,13 @@ import { NButton, NSelect } from 'naive-ui'
 import AppIcon from '@/components/AppIcon.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import DevicePagesEditor from '@/components/DevicePagesEditor.vue'
-import DeviceOverviewPanel from '@/components/device/DeviceOverviewPanel.vue'
-import DeviceSettingsPanel from '@/components/device/DeviceSettingsPanel.vue'
-import DashboardPage from '@/pages/DashboardPage.vue'
-import TagsPage from '@/pages/TagsPage.vue'
+import DevicePageBlock from '@/components/device/DevicePageBlock.vue'
+import DeviceWidgetCard from '@/components/device/DeviceWidgetCard.vue'
 import { useConnectionStore } from '@/stores/connection'
 import { useProjectStore } from '@/stores/project'
 import { useWorkspacesStore } from '@/stores/workspaces'
-import { pagesForPackage } from '@/utils/devicePages'
+import { isCompactWidgetKind, pageUsesGrid, pagesForPackage } from '@/utils/devicePages'
+import type { DevicePageComponentDto } from '@/api/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -35,6 +34,42 @@ const requestedPageId = computed(() =>
 const activePage = computed(
   () => pages.value.find((p) => p.id === requestedPageId.value) ?? pages.value[0] ?? null,
 )
+
+/** 连续的小组件合并成一行自适应网格；其余组件仍按整块纵向排列。 */
+type PageBlock =
+  | { type: 'widgets'; items: { comp: DevicePageComponentDto; index: number }[] }
+  | { type: 'block'; comp: DevicePageComponentDto; index: number }
+
+const pageBlocks = computed<PageBlock[]>(() => {
+  const blocks: PageBlock[] = []
+  activePage.value?.components.forEach((comp, index) => {
+    if (isCompactWidgetKind(comp.kind)) {
+      const last = blocks[blocks.length - 1]
+      if (last?.type === 'widgets') last.items.push({ comp, index })
+      else blocks.push({ type: 'widgets', items: [{ comp, index }] })
+    } else {
+      blocks.push({ type: 'block', comp, index })
+    }
+  })
+  return blocks
+})
+
+/** 页面组件声明了 rect → 12 列绝对网格；否则走流式排列。 */
+const gridMode = computed(() => {
+  const page = activePage.value
+  return !!page && pageUsesGrid(page.components)
+})
+
+function rectStyle(comp: DevicePageComponentDto): Record<string, string> {
+  const r = comp.rect
+  if (!r) return {}
+  return {
+    '--wx': String(r.x),
+    '--wy': String(r.y),
+    '--ww': String(r.w),
+    '--wh': String(r.h),
+  }
+}
 
 // /t/<type> 或已删除的页面 id → 规范到第一页，左侧导航才能正确高亮。
 watch(
@@ -171,37 +206,44 @@ onMounted(() => {
           <span class="muted small mono">{{ typeId }}</span>
         </header>
 
-        <div
-          v-for="(comp, index) in activePage.components"
-          :key="`${activePage.id}-${index}`"
-          class="ws-component"
-        >
-          <div v-if="comp.title" class="ws-component-head">{{ comp.title }}</div>
-
-          <DeviceOverviewPanel
-            v-if="comp.kind === 'overview'"
-            :device-id="selectedDevice.id"
-          />
-          <DashboardPage
-            v-else-if="comp.kind === 'dashboard'"
-            embedded
-            scope-kind="device"
-            :scope-id="selectedDevice.id"
-          />
-          <TagsPage
-            v-else-if="comp.kind === 'tags'"
-            embedded
-            :device-id="selectedDevice.id"
-          />
-          <DeviceSettingsPanel
-            v-else-if="comp.kind === 'settings'"
-            :device-id="selectedDevice.id"
-          />
-          <div v-else class="banner warn">
-            <AppIcon name="alert" :size="16" />
-            <span>未知组件 <code>{{ comp.kind }}</code>，请升级宿主或修改设备包。</span>
+        <!-- 12 列网格：组件按 rect 绝对定位，窄屏自动单列 -->
+        <div v-if="gridMode" class="ws-widget-canvas">
+          <div
+            v-for="(comp, index) in activePage.components"
+            :key="`${activePage.id}-g-${index}`"
+            class="ws-canvas-item"
+            :style="rectStyle(comp)"
+          >
+            <DeviceWidgetCard
+              v-if="isCompactWidgetKind(comp.kind)"
+              :device-id="selectedDevice.id"
+              :component="comp"
+            />
+            <div v-else class="ws-canvas-block">
+              <div v-if="comp.title" class="ws-component-head">{{ comp.title }}</div>
+              <DevicePageBlock :device-id="selectedDevice.id" :component="comp" />
+            </div>
           </div>
         </div>
+
+        <!-- 流式：连续小组件合并为自适应网格，整块组件纵向排列 -->
+        <template v-else>
+          <template v-for="(block, bi) in pageBlocks" :key="`${activePage.id}-${bi}`">
+            <div v-if="block.type === 'widgets'" class="ws-widget-grid">
+              <DeviceWidgetCard
+                v-for="item in block.items"
+                :key="`${activePage.id}-${item.index}`"
+                :device-id="selectedDevice.id"
+                :component="item.comp"
+              />
+            </div>
+
+            <div v-else class="ws-component">
+              <div v-if="block.comp.title" class="ws-component-head">{{ block.comp.title }}</div>
+              <DevicePageBlock :device-id="selectedDevice.id" :component="block.comp" />
+            </div>
+          </template>
+        </template>
       </section>
     </template>
 

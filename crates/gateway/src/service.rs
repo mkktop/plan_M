@@ -616,6 +616,26 @@ fn package_dto(p: &hmi_packaging::InstalledPackage) -> PackageDto {
                         .map(|comp| DevicePageComponentDto {
                             kind: comp.kind.clone(),
                             title: comp.title.clone(),
+                            bind: comp
+                                .bind
+                                .iter()
+                                .map(|(slot, b)| {
+                                    (
+                                        slot.clone(),
+                                        hmi_wire::BindingDeclDto {
+                                            point: b.point.clone(),
+                                            bit: b.bit,
+                                            tag: b.tag.clone(),
+                                        },
+                                    )
+                                })
+                                .collect(),
+                            rect: comp.rect.map(|r| hmi_wire::WidgetRectDto {
+                                x: r.x,
+                                y: r.y,
+                                w: r.w,
+                                h: r.h,
+                            }),
                             config: comp.config.clone(),
                         })
                         .collect(),
@@ -644,6 +664,17 @@ fn package_dto(p: &hmi_packaging::InstalledPackage) -> PackageDto {
                         name: b.name.clone(),
                         on: b.on.clone(),
                         off: b.off.clone(),
+                    })
+                    .collect(),
+                min: pt.min,
+                max: pt.max,
+                step: pt.step,
+                value_enum: pt
+                    .value_enum
+                    .iter()
+                    .map(|e| hmi_wire::EnumValueDto {
+                        value: e.value,
+                        label: e.label.clone(),
                     })
                     .collect(),
             })

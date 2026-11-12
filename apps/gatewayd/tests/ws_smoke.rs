@@ -97,8 +97,31 @@ async fn ws_full_protocol_smoke() {
         .iter()
         .find(|p| p.id == "com.acme.pm3000")
         .unwrap();
-    assert_eq!(pm.ui.pages.len(), 4, "演示包应声明四页工作区");
+    assert_eq!(pm.ui.pages.len(), 5, "演示包应声明五页工作区");
     assert_eq!(pm.ui.pages[0].components[0].kind, "overview");
+    // 小组件页的 bind 必须原样通过 snapshot 下发给 UI（相对点由宿主解析）
+    let monitor = pm
+        .ui
+        .pages
+        .iter()
+        .find(|p| p.id == "monitor")
+        .expect("演示包应包含运行监测页");
+    assert_eq!(monitor.components[0].kind, "core:value");
+    assert_eq!(
+        monitor.components[0]
+            .bind
+            .get("value")
+            .and_then(|b| b.point.as_deref()),
+        Some("uab")
+    );
+    assert_eq!(
+        monitor.components[0]
+            .rect
+            .as_ref()
+            .map(|r| (r.x, r.y, r.w, r.h)),
+        Some((0, 0, 3, 2)),
+        "网格位置应随 snapshot 下发"
+    );
 
     // 3. 订阅 pm1.uab，等待第一个 Good 值（模拟从站预置 2201 → 220.1V）
     send(
@@ -217,6 +240,8 @@ async fn ws_full_protocol_smoke() {
                 components: vec![DevicePageComponentDto {
                     kind: "overview".into(),
                     title: String::new(),
+                    bind: Default::default(),
+                    rect: None,
                     config: serde_json::json!({}),
                 }],
             },
@@ -228,11 +253,15 @@ async fn ws_full_protocol_smoke() {
                     DevicePageComponentDto {
                         kind: "tags".into(),
                         title: "点表".into(),
+                        bind: Default::default(),
+                        rect: None,
                         config: serde_json::json!({}),
                     },
                     DevicePageComponentDto {
                         kind: "dashboard".into(),
                         title: String::new(),
+                        bind: Default::default(),
+                        rect: None,
                         config: serde_json::json!({}),
                     },
                 ],
