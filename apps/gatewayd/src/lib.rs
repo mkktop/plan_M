@@ -1,12 +1,16 @@
-//! gatewayd 库层：CLI 之外的可测试部件（路由、SIM 网络、驱动/传输装配、日志）。
+//! gatewayd 库层：CLI 之外的可测试部件（路由、WS DTO 映射、仪表盘/工作区存储、
+//! SIM 网络、驱动/传输装配、日志）。
 
 pub mod cmd_pkg;
 pub mod cmd_poll;
 pub mod cmd_scan;
+pub mod dashboards;
+pub mod dto;
 pub mod logging;
 pub mod serve;
 pub mod sim_tcp;
 pub mod simnet;
+pub mod workspaces;
 
 use hmi_domain::driver::Driver;
 use hmi_domain::link::TransportFactory;

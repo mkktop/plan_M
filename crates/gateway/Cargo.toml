@@ -1,6 +1,6 @@
 [package]
 name = "hmi-gateway"
-description = "采集运行时：TagHub 实时库、轮询编译器（读块合并）、通道监督器（串行事务/重试/重连）、服务编排"
+description = "采集运行时：通道监督器（串行事务/重试/重连）、TagHub 实时库、服务编排（领域视图，不含 wire DTO）"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,7 +8,6 @@ license.workspace = true
 [dependencies]
 hmi-domain = { workspace = true }
 hmi-packaging = { workspace = true }
-hmi-wire = { workspace = true }
 tokio = { workspace = true }
 dashmap = { workspace = true }
 async-trait = { workspace = true }

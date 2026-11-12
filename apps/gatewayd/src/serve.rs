@@ -1,5 +1,8 @@
 //! serve 子命令：axum HTTP/WS 服务，UI（未来的 Tauri 壳）的唯一入口。
 
+use crate::dashboards::{dashboards_path, DashboardStore};
+use crate::dto;
+use crate::workspaces::{workspaces_path, WorkspaceStore};
 use crate::HOST_VERSION;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
@@ -12,7 +15,7 @@ use hmi_domain::protocol::ScanRange;
 use hmi_domain::value::TagId;
 use hmi_gateway::supervisor::GatewayEvent;
 use hmi_gateway::GatewayService;
-use hmi_wire::{ClientMsg, ServerMsg, UiPluginDto, API_VERSION};
+use hmi_wire::{ClientMsg, ServerMsg, API_VERSION};
 use semver::Version;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -20,6 +23,22 @@ use std::sync::Arc;
 pub struct AppState {
     pub service: Arc<GatewayService>,
     pub token: String,
+    /// 仪表盘布局（工程数据，落 <data-dir>/dashboards.json）
+    pub dashboards: std::sync::Mutex<DashboardStore>,
+    /// 设备类型工作区覆盖（落 <data-dir>/workspaces.json）
+    pub workspaces: std::sync::Mutex<WorkspaceStore>,
+}
+
+impl AppState {
+    /// 组装共享状态：加载工程数据存储。
+    pub fn load(data_dir: &std::path::Path, service: Arc<GatewayService>, token: String) -> Self {
+        Self {
+            service,
+            token,
+            dashboards: std::sync::Mutex::new(DashboardStore::load(dashboards_path(data_dir))),
+            workspaces: std::sync::Mutex::new(WorkspaceStore::load(workspaces_path(data_dir))),
+        }
+    }
 }
 
 pub type SharedState = Arc<AppState>;
@@ -59,7 +78,7 @@ async fn seed_demo(service: &Arc<GatewayService>) -> anyhow::Result<()> {
     ));
 
     let already = service.packages().await;
-    if !already.iter().any(|p| p.id == "com.acme.pm3000") {
+    if !already.iter().any(|p| p.manifest.id == "com.acme.pm3000") {
         // 物化到临时目录走正式安装流
         let seed_dir = std::env::temp_dir().join(format!(
             "hmi-demo-seed-{}",
@@ -76,7 +95,11 @@ async fn seed_demo(service: &Arc<GatewayService>) -> anyhow::Result<()> {
         let r = service.import_package(seed_dir.to_str().unwrap()).await;
         let _ = std::fs::remove_dir_all(&seed_dir);
         match r {
-            Ok(p) => tracing::info!(package = %p.id, version = %p.version, "已安装演示设备包"),
+            Ok(p) => tracing::info!(
+                package = %p.manifest.id,
+                version = %p.manifest.version,
+                "已安装演示设备包"
+            ),
             Err(e) => tracing::warn!(error = %e, "演示设备包安装失败（可能已存在）"),
         }
     }
@@ -141,13 +164,13 @@ async fn health() -> impl axum::response::IntoResponse {
 
 /// 插件清单（HTTP 版，便于外部工具/调试；UI 走 WS 的 `getUiPlugins`）。
 async fn ui_plugin_list(State(state): State<SharedState>) -> Response {
-    let plugins: Vec<UiPluginDto> = state.service.ui_plugins().await;
+    let list = state.service.ui_plugins().await;
     (
         [(
             header::ACCESS_CONTROL_ALLOW_ORIGIN,
             HeaderValue::from_static("*"),
         )],
-        Json(plugins),
+        Json(dto::ui_plugin_dtos(&list)),
     )
         .into_response()
 }
@@ -398,7 +421,7 @@ fn welcome(service: &GatewayService) -> ServerMsg {
         host_version: HOST_VERSION.into(),
         api_version: API_VERSION,
         transports: service.transport_kinds(),
-        drivers: service.driver_info(),
+        drivers: dto::driver_infos(service),
     }
 }
 
@@ -444,7 +467,9 @@ impl Session {
         let svc = self.state.service.clone();
         match msg {
             ClientMsg::Hello { .. } => Ok(Some(welcome(&svc))),
-            ClientMsg::GetSnapshot => Ok(Some(ServerMsg::Snapshot(svc.snapshot().await))),
+            ClientMsg::GetSnapshot => Ok(Some(ServerMsg::Snapshot(dto::snapshot_data(
+                svc.snapshot().await,
+            )))),
             ClientMsg::Subscribe { tags } => {
                 for t in tags {
                     self.subscribed.insert(t);
@@ -490,73 +515,116 @@ impl Session {
                 Ok(Some(ServerMsg::TransportTargets { transport, targets }))
             }
             ClientMsg::GetPackages => {
-                let packages = svc.packages().await;
+                let packages = dto::package_dtos(&svc.packages().await);
                 Ok(Some(ServerMsg::Packages { packages }))
             }
             ClientMsg::UpsertChannel { config } => match svc.upsert_channel(config).await {
-                Ok(()) => Ok(Some(ServerMsg::Snapshot(svc.snapshot().await))),
+                Ok(()) => Ok(Some(ServerMsg::Snapshot(dto::snapshot_data(
+                    svc.snapshot().await,
+                )))),
                 Err(e) => Ok(Some(ServerMsg::Error {
                     message: e.to_string(),
                 })),
             },
             ClientMsg::RemoveChannel { channel } => match svc.remove_channel(&channel).await {
-                Ok(()) => Ok(Some(ServerMsg::Snapshot(svc.snapshot().await))),
+                Ok(()) => Ok(Some(ServerMsg::Snapshot(dto::snapshot_data(
+                    svc.snapshot().await,
+                )))),
                 Err(e) => Ok(Some(ServerMsg::Error {
                     message: e.to_string(),
                 })),
             },
             ClientMsg::AddDevice { config } => match svc.add_device(config).await {
-                Ok(()) => Ok(Some(ServerMsg::Snapshot(svc.snapshot().await))),
+                Ok(()) => Ok(Some(ServerMsg::Snapshot(dto::snapshot_data(
+                    svc.snapshot().await,
+                )))),
                 Err(e) => Ok(Some(ServerMsg::Error {
                     message: e.to_string(),
                 })),
             },
             ClientMsg::RemoveDevice { device } => match svc.remove_device(&device).await {
-                Ok(()) => Ok(Some(ServerMsg::Snapshot(svc.snapshot().await))),
+                Ok(()) => Ok(Some(ServerMsg::Snapshot(dto::snapshot_data(
+                    svc.snapshot().await,
+                )))),
                 Err(e) => Ok(Some(ServerMsg::Error {
                     message: e.to_string(),
                 })),
             },
             ClientMsg::ImportPackage { path } => match svc.import_package(&path).await {
-                Ok(_) => Ok(Some(ServerMsg::Snapshot(svc.snapshot().await))),
+                Ok(_) => Ok(Some(ServerMsg::Snapshot(dto::snapshot_data(
+                    svc.snapshot().await,
+                )))),
                 Err(e) => Ok(Some(ServerMsg::Error { message: e })),
             },
             ClientMsg::RemovePackage { id } => match svc.remove_package(&id).await {
-                Ok(()) => Ok(Some(ServerMsg::Snapshot(svc.snapshot().await))),
+                Ok(()) => Ok(Some(ServerMsg::Snapshot(dto::snapshot_data(
+                    svc.snapshot().await,
+                )))),
                 Err(e) => Ok(Some(ServerMsg::Error { message: e })),
             },
             ClientMsg::GetDashboards => Ok(Some(ServerMsg::Dashboards {
-                dashboards: svc.dashboards().await,
+                dashboards: self.state.dashboards.lock().unwrap().list(),
             })),
-            ClientMsg::SaveDashboard { dashboard } => match svc.save_dashboard(dashboard).await {
-                Ok(dashboards) => Ok(Some(ServerMsg::Dashboards { dashboards })),
-                Err(e) => Ok(Some(ServerMsg::Error { message: e })),
-            },
-            ClientMsg::RemoveDashboard { id } => match svc.remove_dashboard(&id).await {
-                Ok(dashboards) => Ok(Some(ServerMsg::Dashboards { dashboards })),
-                Err(e) => Ok(Some(ServerMsg::Error { message: e })),
-            },
-            ClientMsg::GetUiPlugins => Ok(Some(ServerMsg::UiPlugins {
-                plugins: svc.ui_plugins().await,
-            })),
+            ClientMsg::SaveDashboard { dashboard } => {
+                let mut store = self.state.dashboards.lock().unwrap();
+                match store.upsert(dashboard) {
+                    Ok(()) => Ok(Some(ServerMsg::Dashboards {
+                        dashboards: store.list(),
+                    })),
+                    Err(e) => Ok(Some(ServerMsg::Error { message: e })),
+                }
+            }
+            ClientMsg::RemoveDashboard { id } => {
+                let mut store = self.state.dashboards.lock().unwrap();
+                match store.remove(&id) {
+                    Ok(()) => Ok(Some(ServerMsg::Dashboards {
+                        dashboards: store.list(),
+                    })),
+                    Err(e) => Ok(Some(ServerMsg::Error { message: e })),
+                }
+            }
+            ClientMsg::GetUiPlugins => {
+                let list = svc.ui_plugins().await;
+                Ok(Some(ServerMsg::UiPlugins {
+                    plugins: dto::ui_plugin_dtos(&list),
+                }))
+            }
             ClientMsg::ImportUiPlugin { path } => match svc.import_ui_plugin(&path).await {
-                Ok(plugins) => Ok(Some(ServerMsg::UiPlugins { plugins })),
+                Ok(()) => {
+                    let list = svc.ui_plugins().await;
+                    Ok(Some(ServerMsg::UiPlugins {
+                        plugins: dto::ui_plugin_dtos(&list),
+                    }))
+                }
                 Err(e) => Ok(Some(ServerMsg::Error { message: e })),
             },
             ClientMsg::RemoveUiPlugin { id } => match svc.remove_ui_plugin(&id).await {
-                Ok(plugins) => Ok(Some(ServerMsg::UiPlugins { plugins })),
+                Ok(()) => {
+                    let list = svc.ui_plugins().await;
+                    Ok(Some(ServerMsg::UiPlugins {
+                        plugins: dto::ui_plugin_dtos(&list),
+                    }))
+                }
                 Err(e) => Ok(Some(ServerMsg::Error { message: e })),
             },
             ClientMsg::GetWorkspaces => Ok(Some(ServerMsg::Workspaces {
-                workspaces: svc.workspaces().await,
+                workspaces: self.state.workspaces.lock().unwrap().list(),
             })),
-            ClientMsg::SaveWorkspace { workspace } => match svc.save_workspace(workspace).await {
-                Ok(workspaces) => Ok(Some(ServerMsg::Workspaces { workspaces })),
-                Err(e) => Ok(Some(ServerMsg::Error { message: e })),
-            },
+            ClientMsg::SaveWorkspace { workspace } => {
+                let mut store = self.state.workspaces.lock().unwrap();
+                match store.upsert(workspace) {
+                    Ok(()) => Ok(Some(ServerMsg::Workspaces {
+                        workspaces: store.list(),
+                    })),
+                    Err(e) => Ok(Some(ServerMsg::Error { message: e })),
+                }
+            }
             ClientMsg::RemoveWorkspace { device_type } => {
-                match svc.remove_workspace(&device_type).await {
-                    Ok(workspaces) => Ok(Some(ServerMsg::Workspaces { workspaces })),
+                let mut store = self.state.workspaces.lock().unwrap();
+                match store.remove(&device_type) {
+                    Ok(()) => Ok(Some(ServerMsg::Workspaces {
+                        workspaces: store.list(),
+                    })),
                     Err(e) => Ok(Some(ServerMsg::Error { message: e })),
                 }
             }
@@ -571,7 +639,9 @@ impl Session {
             }
             ClientMsg::InstallDraftPackage { manifest, points } => {
                 match svc.install_draft_package(&manifest, &points).await {
-                    Ok(_) => Ok(Some(ServerMsg::Snapshot(svc.snapshot().await))),
+                    Ok(_) => Ok(Some(ServerMsg::Snapshot(dto::snapshot_data(
+                        svc.snapshot().await,
+                    )))),
                     Err(e) => Ok(Some(ServerMsg::Error { message: e })),
                 }
             }

@@ -116,10 +116,8 @@ async fn main() -> Result<()> {
 
             let service = serve::build_service(&data_dir, *sim).await?;
             let token = read_or_create_token(&data_dir)?;
-            let state = std::sync::Arc::new(serve::AppState {
-                service,
-                token: token.clone(),
-            });
+            let state =
+                std::sync::Arc::new(serve::AppState::load(&data_dir, service, token.clone()));
             let app = serve::build_router(state);
 
             let addr = std::net::SocketAddr::from(([127, 0, 0, 1], *port));

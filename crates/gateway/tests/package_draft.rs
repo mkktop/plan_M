@@ -67,9 +67,9 @@ async fn draft_validate_install_and_export() {
         .install_draft_package(&manifest(), &points())
         .await
         .unwrap();
-    assert_eq!(installed.id, "com.test.studio");
-    assert_eq!(installed.ui.pages.len(), 1);
-    let page = &installed.ui.pages[0];
+    assert_eq!(installed.manifest.id, "com.test.studio");
+    assert_eq!(installed.manifest.ui.pages.len(), 1);
+    let page = &installed.manifest.ui.pages[0];
     assert_eq!(page.components.len(), 2);
     // v2 widgets[] 已翻译为 components，实例 id 保留
     assert_eq!(page.components[0].id.as_deref(), Some("w1"));
@@ -79,7 +79,7 @@ async fn draft_validate_install_and_export() {
         .packages()
         .await
         .iter()
-        .any(|p| p.id == "com.test.studio"));
+        .any(|p| p.manifest.id == "com.test.studio"));
 
     // 导出保留原始 v2 形态（widgets[] 不被翻译写回）
     let out = tmp.path().join("export");

@@ -52,11 +52,11 @@ crates/
 ├─ transport-sim/     进程内虚拟传输：字节管道 + 可插拔应答器
 ├─ driver-modbus/     Modbus 驱动：PDU + RTU/MBAP 帧 + 点表编译 + 内存从站（SimSlave）
 ├─ packaging/         设备包与 UI 插件：manifest/点表/页面声明解析、语义校验、安装、注册表
-├─ gateway/           通用运行时：通道监督器、TagHub、服务编排、
-│                     仪表盘布局（dashboards.json）、设备类型工作区（workspaces.json）
+├─ gateway/           通用运行时：通道监督器、TagHub、服务编排（只产出领域视图，不依赖 wire）
 └─ wire/              gatewayd ↔ UI 的 WS 消息契约（serde，两端共用）
 apps/
-├─ gatewayd/          CLI：serve / poll / scan / pkg；HTTP 静态服务 /plugins、/packages
+├─ gatewayd/          宿主：驱动/传输注册、WS DTO 映射（dto.rs）、仪表盘/工作区存储、
+│                     CLI serve / poll / scan / sim-tcp / pkg；HTTP /plugins、/packages
 └─ desktop/
    ├─ src-tauri/      Tauri 2 薄壳（gateway_info / 应用更新命令；不写业务逻辑）
    ├─ ui/             Vue 3 + TS + Vite + Pinia（WS 客户端 / 业务页 / 设置页 / 插件宿主）

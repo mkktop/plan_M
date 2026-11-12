@@ -19,10 +19,11 @@ async fn start_server() -> (String, String) {
         .await
         .expect("build service");
     let token = "test-token".to_string();
-    let state = std::sync::Arc::new(hmi_gatewayd::serve::AppState {
+    let state = std::sync::Arc::new(hmi_gatewayd::serve::AppState::load(
+        dir.path(),
         service,
-        token: token.clone(),
-    });
+        token.clone(),
+    ));
     let app = hmi_gatewayd::serve::build_router(state);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

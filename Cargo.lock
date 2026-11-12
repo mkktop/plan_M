@@ -1577,7 +1577,6 @@ dependencies = [
  "hmi-packaging",
  "hmi-transport-sim",
  "hmi-transport-tcp",
- "hmi-wire",
  "semver",
  "serde",
  "serde_json",
