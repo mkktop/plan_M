@@ -1,39 +1,23 @@
-//! SIM 通道的虚拟总线网络：每个服务实例一张网络表（按通道 id 复用共享总线）。
+//! SIM 传输：进程内虚拟总线的演示从站。
 //!
-//! 用途：`gatewayd serve --sim` 演示模式与 WS 冒烟测试 —— 无硬件跑通全链路。
-//! 通道重连时复用同一条虚拟总线（演示语义）。
+//! `SimFactory` 负责为每条 SIM 通道创建一个 Modbus RTU 应答器；
+//! 演示数据与 `gatewayd serve --sim` / `sim-tcp` 共用。
 
-use hmi_domain::transport::BusTransport;
-use hmi_driver_modbus_rtu::{sim_pair, spawn_slave_endpoint, SimSlave};
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use hmi_domain::config::ChannelConfig;
+use hmi_domain::link::TransportFactory;
+use hmi_driver_modbus::SimSlave;
+use hmi_transport_sim::{SimFactory, SimResponder};
+use std::sync::Arc;
 
-/// 服务实例级的 SIM 网络：通道 id → 共享虚拟总线。
-#[derive(Default)]
-pub struct SimNetwork {
-    buses: Mutex<HashMap<String, Arc<dyn BusTransport>>>,
+/// 构造宿主用 SIM 传输工厂（每条通道一个独立的演示从站状态）。
+pub fn sim_factory() -> Arc<dyn TransportFactory> {
+    Arc::new(SimFactory::new(Arc::new(|_channel: &ChannelConfig| {
+        let slave = demo_slave();
+        Arc::new(move |req: &[u8]| slave.respond_rtu(req)) as SimResponder
+    })))
 }
 
-impl SimNetwork {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self::default())
-    }
-
-    /// 取（或创建）某通道的共享虚拟总线。
-    pub fn bus_for(&self, channel_id: &str) -> Arc<dyn BusTransport> {
-        let mut reg = self.buses.lock().unwrap();
-        reg.entry(channel_id.to_string())
-            .or_insert_with(|| {
-                let (transport, endpoint) = sim_pair();
-                let slave = demo_slave();
-                spawn_slave_endpoint(endpoint, slave);
-                Arc::new(transport)
-            })
-            .clone()
-    }
-}
-
-/// 预置演示数据的模拟电表（两个从站地址共享同一应答器，值相同）。
+/// 预置演示数据的模拟电表（PM3000 演示包）。
 pub fn demo_slave() -> Arc<SimSlave> {
     Arc::new(
         SimSlave::new()

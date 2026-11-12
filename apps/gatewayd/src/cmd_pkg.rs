@@ -22,7 +22,8 @@ pub async fn run(cmd: PkgCmd) -> Result<()> {
 
 fn validate(path: &std::path::Path) -> Result<()> {
     println!("校验设备包: {}", path.display());
-    match hmi_packaging::load_package_dir(path) {
+    let drivers = crate::drivers();
+    match hmi_packaging::load_package_dir(path, &drivers) {
         Ok(pkg) => {
             println!("  ✔ manifest 解析通过");
             println!(
@@ -32,14 +33,14 @@ fn validate(path: &std::path::Path) -> Result<()> {
                 pkg.manifest.version,
                 pkg.manifest.protocol.driver
             );
-            // 重新跑一次带 warnings 的完整校验
-            let issues = hmi_packaging::validate_package(&pkg.manifest, &pkg.points);
+            println!("  ✔ transports={:?}", pkg.manifest.protocol.transports);
+            let issues = hmi_packaging::validate_package(&pkg.manifest, &pkg.points, &drivers);
             println!("  ✔ 点表解析通过（{} 点）", pkg.points.points.len());
             for p in pkg.points.points.iter().take(5) {
                 println!(
                     "    · {} @ {} [{}] {}",
                     p.id,
-                    p.register.to_engineering(),
+                    p.address,
                     p.data_type.as_str(),
                     p.name
                 );
@@ -64,7 +65,8 @@ async fn install(path: &std::path::Path, data_dir: Option<std::path::PathBuf>) -
         .unwrap_or_else(crate::default_data_dir)
         .join("packages");
     let host = Version::parse(crate::HOST_VERSION)?;
-    match hmi_packaging::install(path, &root, &host) {
+    let drivers = crate::drivers();
+    match hmi_packaging::install(path, &root, &host, &drivers) {
         Ok(installed) => {
             println!(
                 "  ✔ 已安装 {} v{} → {}",

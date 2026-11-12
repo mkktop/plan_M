@@ -4,7 +4,10 @@ members = [
     "crates/domain",
     "crates/wire",
     "crates/gateway",
-    "crates/driver-modbus-rtu",
+    "crates/driver-modbus",
+    "crates/transport-serial",
+    "crates/transport-tcp",
+    "crates/transport-sim",
     "crates/packaging",
     "apps/gatewayd",
     "apps/desktop/src-tauri",
@@ -21,7 +24,10 @@ hmi-domain = { path = "crates/domain" }
 hmi-wire = { path = "crates/wire" }
 hmi-gateway = { path = "crates/gateway" }
 hmi-packaging = { path = "crates/packaging" }
-hmi-driver-modbus-rtu = { path = "crates/driver-modbus-rtu" }
+hmi-driver-modbus = { path = "crates/driver-modbus" }
+hmi-transport-serial = { path = "crates/transport-serial" }
+hmi-transport-tcp = { path = "crates/transport-tcp" }
+hmi-transport-sim = { path = "crates/transport-sim" }
 
 # async / serialization
 tokio = { version = "1", features = ["full"] }

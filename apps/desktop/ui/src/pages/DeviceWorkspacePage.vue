@@ -12,6 +12,7 @@ import { useProjectStore } from '@/stores/project'
 import { useWorkspacesStore } from '@/stores/workspaces'
 import { isCompactWidgetKind, pageUsesGrid, pagesForPackage } from '@/utils/devicePages'
 import type { DevicePageComponentDto } from '@/api/types'
+import { addressLabel } from '@/utils/transport'
 
 const route = useRoute()
 const router = useRouter()
@@ -113,7 +114,7 @@ onMounted(() => {
           <h2>{{ device.name || device.id }}</h2>
           <div class="ws-meta">
             <span class="mono">{{ device.id }}</span>
-            <span>从站 #{{ device.slave }}</span>
+            <span>{{ addressLabel(device.address) }}</span>
             <span v-if="channelName">{{ channelName }}</span>
             <span class="ws-meta-sep" />
             <span class="online-dot" :class="{ on: device.online }" />

@@ -7,11 +7,12 @@ use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use hmi_domain::driver::Driver;
+use hmi_domain::config::{ChannelConfig, ChannelTiming, DeviceConfig, SimParams, TransportConfig};
+use hmi_domain::protocol::ScanRange;
 use hmi_domain::value::TagId;
 use hmi_gateway::supervisor::GatewayEvent;
 use hmi_gateway::GatewayService;
-use hmi_wire::{ClientMsg, ServerMsg, UiPluginDto};
+use hmi_wire::{ClientMsg, ServerMsg, UiPluginDto, API_VERSION};
 use semver::Version;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -28,13 +29,11 @@ pub async fn build_service(
     data_dir: &std::path::Path,
     sim: bool,
 ) -> anyhow::Result<Arc<GatewayService>> {
-    let drivers: Vec<Arc<dyn Driver>> =
-        vec![Arc::new(hmi_driver_modbus_rtu::ModbusRtuDriver::new())];
     let service = GatewayService::new(
         data_dir,
         Version::parse(HOST_VERSION)?,
-        drivers,
-        crate::bus_opener(crate::simnet::SimNetwork::new()),
+        crate::drivers(),
+        crate::transports(),
     )?;
 
     if sim {
@@ -85,28 +84,26 @@ async fn seed_demo(service: &Arc<GatewayService>) -> anyhow::Result<()> {
     // 空配置 → 建演示通道与设备
     if service.snapshot().await.channels.is_empty() {
         service
-            .upsert_channel(hmi_domain::config::SerialChannelConfig {
+            .upsert_channel(ChannelConfig {
                 id: "sim1".into(),
                 name: "演示总线（虚拟）".into(),
-                port: "SIM".into(),
-                hw_id: None,
-                baud_rate: 9600,
-                data_bits: 8,
-                parity: hmi_domain::config::Parity::None,
-                stop_bits: 1,
-                resp_timeout_ms: 150,
-                retries: 2,
-                inter_frame_gap_ms: 2,
+                timing: ChannelTiming {
+                    resp_timeout_ms: 150,
+                    retries: 2,
+                    probe_interval_ms: 5000,
+                },
+                transport: TransportConfig::Sim(SimParams { seed: None }),
             })
             .await?;
-        for (id, slave, name) in [("pm1", 1u8, "演示电表 1"), ("pm2", 2u8, "演示电表 2")] {
+        for (id, address, name) in [("pm1", 1u32, "演示电表 1"), ("pm2", 2u32, "演示电表 2")]
+        {
             service
-                .add_device(hmi_domain::config::DeviceConfig {
+                .add_device(DeviceConfig {
                     id: id.into(),
                     name: name.into(),
                     channel_id: "sim1".into(),
                     package: "com.acme.pm3000".into(),
-                    slave,
+                    address: address.into(),
                     overrides: Default::default(),
                 })
                 .await?;
@@ -396,6 +393,15 @@ async fn handle_socket(mut socket: WebSocket, state: SharedState) {
     tracing::debug!("WS 连接关闭");
 }
 
+fn welcome(service: &GatewayService) -> ServerMsg {
+    ServerMsg::Welcome {
+        host_version: HOST_VERSION.into(),
+        api_version: API_VERSION,
+        transports: service.transport_kinds(),
+        drivers: service.driver_info(),
+    }
+}
+
 fn event_to_msg(ev: GatewayEvent) -> ServerMsg {
     match ev {
         GatewayEvent::ChannelState {
@@ -432,16 +438,12 @@ impl Session {
                 return Err(());
             }
             self.authenticated = true;
-            return Ok(Some(ServerMsg::Welcome {
-                host_version: HOST_VERSION.into(),
-            }));
+            return Ok(Some(welcome(&self.state.service)));
         }
 
         let svc = self.state.service.clone();
         match msg {
-            ClientMsg::Hello { .. } => Ok(Some(ServerMsg::Welcome {
-                host_version: HOST_VERSION.into(),
-            })),
+            ClientMsg::Hello { .. } => Ok(Some(welcome(&svc))),
             ClientMsg::GetSnapshot => Ok(Some(ServerMsg::Snapshot(svc.snapshot().await))),
             ClientMsg::Subscribe { tags } => {
                 for t in tags {
@@ -472,21 +474,20 @@ impl Session {
                 })),
                 Err(e) => Ok(Some(ServerMsg::Error { message: e })),
             },
-            ClientMsg::ScanChannel { channel, range } => {
-                let range = range.unwrap_or((1, 32));
-                let found = svc.scan_channel(&channel, range).await;
+            ClientMsg::ScanChannel {
+                channel,
+                driver,
+                range,
+            } => {
+                let range = range.unwrap_or(ScanRange { from: 1, to: 32 });
+                let found = svc
+                    .scan_channel(&channel, driver.as_deref(), range, |_addr, _found| {})
+                    .await;
                 Ok(Some(ServerMsg::ScanDone { channel, found }))
             }
-            ClientMsg::GetSerialPorts => {
-                let ports = hmi_driver_modbus_rtu::list_serial_ports()
-                    .into_iter()
-                    .map(|p| hmi_wire::SerialPortDto {
-                        port_name: p.port_name,
-                        hw_id: p.hw_id,
-                        description: p.description,
-                    })
-                    .collect();
-                Ok(Some(ServerMsg::SerialPorts { ports }))
+            ClientMsg::GetTransportTargets { transport } => {
+                let targets = svc.transport_targets(transport).await;
+                Ok(Some(ServerMsg::TransportTargets { transport, targets }))
             }
             ClientMsg::GetPackages => {
                 let packages = svc.packages().await;

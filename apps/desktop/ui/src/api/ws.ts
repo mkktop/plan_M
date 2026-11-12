@@ -391,7 +391,7 @@ class GatewayClient {
 function describeServer(m: ServerMsg): string {
   switch (m.type) {
     case 'welcome':
-      return `welcome · host ${m.hostVersion}`
+      return `welcome · host ${m.hostVersion} · api ${m.apiVersion} · ${m.transports.join('/')}`
     case 'snapshot':
       return `snapshot · 通道 ${m.channels.length} · 设备 ${m.devices.length} · 包 ${m.packages.length} · tag ${m.tags.length}`
     case 'changes':
@@ -401,11 +401,11 @@ function describeServer(m: ServerMsg): string {
     case 'deviceState':
       return `deviceState · ${m.device} → ${m.online ? 'online' : 'offline'}`
     case 'scanProgress':
-      return `scanProgress · ${m.channel} #${m.slave} ${m.found ? 'found' : '-'}`
+      return `scanProgress · ${m.channel} ${m.address} ${m.found ? 'found' : '-'}`
     case 'scanDone':
-      return `scanDone · ${m.channel} · 发现 ${m.found.length} 个从站`
-    case 'serialPorts':
-      return `serialPorts · ${m.ports.length} 个串口`
+      return `scanDone · ${m.channel} · 发现 ${m.found.length} 个设备`
+    case 'transportTargets':
+      return `transportTargets · ${m.transport} · ${m.targets.length} 个目标`
     case 'packages':
       return `packages · ${m.packages.length} 个设备包`
     case 'dashboards':
@@ -434,21 +434,21 @@ function describeClient(m: ClientMsg): string {
     case 'writeTag':
       return `writeTag · ${m.tag} = ${JSON.stringify(m.value)}`
     case 'scanChannel':
-      return `scanChannel · ${m.channel} ${m.range ? `${m.range[0]}-${m.range[1]}` : ''}`
+      return `scanChannel · ${m.channel} ${m.range ? `${m.range.from}-${m.range.to}` : ''}`
     case 'upsertChannel':
-      return `upsertChannel · ${m.config.id} (${m.config.port})`
+      return `upsertChannel · ${m.config.id} (${m.config.transport})`
     case 'removeChannel':
       return `removeChannel · ${m.channel}`
     case 'addDevice':
-      return `addDevice · ${m.config.id} @ ${m.config.channelId}#${m.config.slave}`
+      return `addDevice · ${m.config.id} @ ${m.config.channelId} ${m.config.address}`
     case 'removeDevice':
       return `removeDevice · ${m.device}`
     case 'importPackage':
       return `importPackage · ${m.path}`
     case 'getSnapshot':
       return 'getSnapshot'
-    case 'getSerialPorts':
-      return 'getSerialPorts'
+    case 'getTransportTargets':
+      return `getTransportTargets · ${m.transport}`
     case 'getPackages':
       return 'getPackages'
     case 'getDashboards':

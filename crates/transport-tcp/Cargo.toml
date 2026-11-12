@@ -1,0 +1,12 @@
+[package]
+name = "hmi-transport-tcp"
+description = "TCP 传输：字节流连接、连接超时、断线上报"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+hmi-domain = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde_json = { workspace = true }

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "com.acme.pm3000",
   "name": "ACME PM3000 三相电表",
   "vendor": "ACME",
@@ -139,10 +139,11 @@
     ]
   },
   "protocol": {
-    "driver": "modbus-rtu",
-    "defaults": {
-      "byteOrder": "abcd",
-      "respTimeoutMs": 150
+    "driver": "modbus",
+    "transports": ["serial", "tcp", "sim"],
+    "params": {
+      "framing": "auto",
+      "byteOrder": "abcd"
     }
   }
 }

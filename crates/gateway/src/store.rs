@@ -59,18 +59,21 @@ mod tests {
         assert_eq!(store.load().unwrap(), ProjectConfig::default());
 
         let mut cfg = ProjectConfig::default();
-        cfg.channels.push(hmi_domain::config::SerialChannelConfig {
+        cfg.channels.push(hmi_domain::config::ChannelConfig {
             id: "ch1".into(),
             name: "总线".into(),
-            port: "COM3".into(),
-            hw_id: None,
-            baud_rate: 9600,
-            data_bits: 8,
-            parity: hmi_domain::config::Parity::None,
-            stop_bits: 1,
-            resp_timeout_ms: 200,
-            retries: 2,
-            inter_frame_gap_ms: 5,
+            timing: hmi_domain::config::ChannelTiming::default(),
+            transport: hmi_domain::config::TransportConfig::Serial(
+                hmi_domain::config::SerialParams {
+                    port: "COM3".into(),
+                    hw_id: None,
+                    baud_rate: 9600,
+                    data_bits: 8,
+                    parity: hmi_domain::config::Parity::None,
+                    stop_bits: 1,
+                    inter_frame_gap_ms: 5,
+                },
+            ),
         });
         store.save(&cfg).unwrap();
 

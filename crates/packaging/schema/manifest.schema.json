@@ -68,7 +68,7 @@
     }
   },
   "properties": {
-    "schemaVersion": { "type": "integer", "const": 1 },
+    "schemaVersion": { "type": "integer", "const": 2 },
     "id": {
       "type": "string",
       "pattern": "^[a-z0-9]+(\\.[a-z0-9-]+)+$",
@@ -173,13 +173,20 @@
       "type": "object",
       "required": ["driver"],
       "properties": {
-        "driver": { "type": "string", "enum": ["modbus-rtu"] },
-        "defaults": {
+        "driver": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "description": "驱动 id，如 modbus / ble-gatt / script；存在性由宿主安装时校验"
+        },
+        "transports": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["serial", "tcp", "sim", "ble"] },
+          "description": "该包允许的传输；缺省 = 驱动支持的全部"
+        },
+        "params": {
           "type": "object",
-          "properties": {
-            "byteOrder": { "enum": ["abcd", "badc", "cdab", "dcba"] },
-            "respTimeoutMs": { "type": "integer", "minimum": 20, "maximum": 10000 }
-          }
+          "description": "驱动私有默认参数（Modbus: framing=auto|rtu|tcp、byteOrder=abcd|badc|cdab|dcba）"
         }
       }
     }

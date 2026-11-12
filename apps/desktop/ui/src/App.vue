@@ -15,6 +15,7 @@ import { useProjectStore } from '@/stores/project'
 import { useWorkspacesStore } from '@/stores/workspaces'
 import { pagesForPackage } from '@/utils/devicePages'
 import { nowMs } from '@/utils/clock'
+import { addressLabel } from '@/utils/transport'
 
 const route = useRoute()
 const router = useRouter()
@@ -200,7 +201,7 @@ onBeforeUnmount(() => {
           <span class="rail-context-label">当前设备</span>
           <strong>{{ activeDevice.name || activeDevice.id }}</strong>
           <span class="mono muted small">
-            #{{ activeDevice.slave }} · {{ activePackage?.name || activeDevice.id }}
+            {{ addressLabel(activeDevice.address) }} · {{ activePackage?.name || activeDevice.id }}
           </span>
         </div>
 

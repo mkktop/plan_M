@@ -20,5 +20,7 @@ serde_json = { workspace = true }
 semver = { workspace = true }
 
 [dev-dependencies]
-hmi-driver-modbus-rtu = { workspace = true }
+hmi-driver-modbus = { workspace = true }
+hmi-transport-sim = { workspace = true }
+hmi-transport-tcp = { workspace = true }
 tempfile = "3"

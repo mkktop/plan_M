@@ -1,57 +1,77 @@
-//! scan 子命令：探测一条总线上有哪些从站应答。
+//! scan 子命令：探测一条串口/TCP 链路上有哪些设备地址应答。
 
 use anyhow::Result;
-use hmi_domain::config::{Parity, SerialChannelConfig};
-use hmi_domain::driver::Driver;
+use hmi_domain::config::DeviceAddress;
+use hmi_domain::protocol::ProtocolDecl;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::cmd_poll::{build_channel, factory_for, transport_summary, TransportArg};
+
 pub struct ScanArgs {
-    pub com: String,
+    pub transport: TransportArg,
+    pub com: Option<String>,
+    pub host: Option<String>,
+    pub tcp_port: u16,
     pub baud: u32,
-    pub from: u8,
-    pub to: u8,
+    pub from: u32,
+    pub to: u32,
 }
 
 pub async fn run(args: ScanArgs) -> Result<()> {
-    let cfg = SerialChannelConfig {
-        id: "scan".into(),
-        name: String::new(),
-        port: args.com.clone(),
-        hw_id: None,
-        baud_rate: args.baud,
-        data_bits: 8,
-        parity: Parity::None,
-        stop_bits: 1,
-        resp_timeout_ms: 150,
-        retries: 0,
-        inter_frame_gap_ms: 2,
+    let channel = build_channel(
+        "scan",
+        args.transport,
+        args.com.as_deref(),
+        args.host.as_deref(),
+        args.tcp_port,
+        args.baud,
+        150,
+    )?;
+    let factory = factory_for(args.transport);
+    let link = factory
+        .open(&channel)
+        .await
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+    let driver: Arc<dyn hmi_domain::driver::Driver> = crate::drivers()
+        .into_iter()
+        .find(|d| d.id() == "modbus")
+        .expect("宿主必须注册 modbus 驱动");
+    let protocol = ProtocolDecl {
+        driver: "modbus".into(),
+        transports: Vec::new(),
+        params: serde_json::json!({}),
     };
-    let bus = hmi_driver_modbus_rtu::SerialTransport::open(&cfg).map_err(anyhow::Error::msg)?;
-    let driver = Arc::new(hmi_driver_modbus_rtu::ModbusRtuDriver::new());
 
     println!(
-        "扫描 {} @ {}，从站 {}-{} …",
-        args.com, args.baud, args.from, args.to
+        "扫描 {} {}，地址 {}-{} …",
+        args.transport.kind(),
+        transport_summary(&channel),
+        args.from,
+        args.to
     );
     let mut found = Vec::new();
     let t0 = std::time::Instant::now();
-    for slave in args.from..=args.to {
-        print!("\r  探测从站 {slave:>3} …");
-        let r = driver.probe(&bus, slave, Duration::from_millis(150)).await;
-        if r.is_ok() {
-            found.push(slave);
+    for n in args.from..=args.to {
+        print!("\r  探测地址 {n:>3} …");
+        let addr = DeviceAddress::Number(n);
+        if driver
+            .probe(link.as_ref(), &addr, &protocol, Duration::from_millis(150))
+            .await
+            .is_ok()
+        {
+            found.push(n);
         }
-        // 打印 flush
         use std::io::Write;
         std::io::stdout().flush().ok();
     }
     println!("\r{}\n", " ".repeat(30));
     if found.is_empty() {
-        println!("未发现任何从站（检查接线/波特率/从站地址）");
+        println!("未发现任何设备（检查接线/波特率/地址）");
     } else {
         println!(
-            "发现 {} 个从站: {:?}（耗时 {:?}）",
+            "发现 {} 个设备: {:?}（耗时 {:?}）",
             found.len(),
             found,
             t0.elapsed()

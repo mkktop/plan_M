@@ -1,367 +1,191 @@
-//! 端到端集成测试：虚拟 485 总线上的完整采集链路。
+//! 端到端集成测试：虚拟总线上的完整采集链路。
 //!
-//! 覆盖：编译 → 通道监督器 → 事务串行 → 解码 → TagHub 值/质量流转 →
-//! 从站离线/恢复 → 坏设备不阻塞同总线好设备 → 写命令。
+//! 覆盖：Modbus 驱动编译 → 通道监督器 → 事务串行 → 解码 → TagHub 值/质量 →
+//! 写点 → 设备离线/恢复 → 坏设备不阻塞同总线好设备。
 
-use hmi_domain::config::{DeviceConfig, Parity, ProjectConfig, SerialChannelConfig};
-use hmi_domain::points::{Access, BitDef, PointDef, PointsTable, PollGroupDef, ProtocolDefaults};
-use hmi_domain::value::{Quality, TagId, Value};
-use hmi_driver_modbus_rtu::{sim_pair, spawn_slave_endpoint, ModbusRtuDriver, SimSlave};
-use hmi_gateway::poll::compile;
-use hmi_gateway::supervisor::{
-    spawn_channel, BusOpener, ChannelRuntime, DeviceRuntime, GatewayEvent,
-};
-use hmi_gateway::{ConfigStore, TagHub};
-use std::collections::BTreeMap;
+use hmi_domain::config::{ChannelConfig, ChannelTiming, DeviceConfig, SimParams, TransportConfig};
+use hmi_domain::driver::Driver;
+use hmi_domain::value::{Quality, Value};
+use hmi_driver_modbus::{ModbusDriver, SimSlave};
+use hmi_gateway::GatewayService;
+use hmi_transport_sim::{SimFactory, SimResponder};
+use semver::Version;
+use serde_json::json;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-fn pm_like_table() -> PointsTable {
-    let mut bits = BTreeMap::new();
-    bits.insert(
-        0,
-        BitDef {
-            name: "运行".into(),
-            on: None,
-            off: None,
-        },
-    );
-    PointsTable {
-        poll_groups: vec![
-            PollGroupDef {
-                name: "fast".into(),
-                interval_ms: 100,
-            },
-            PollGroupDef {
-                name: "slow".into(),
-                interval_ms: 300,
-            },
-        ],
-        points: vec![
-            PointDef {
-                id: "uab".into(),
-                name: "AB线电压".into(),
-                register: "40101".parse().unwrap(),
-                data_type: hmi_domain::codec::DataType::U16,
-                byte_order: None,
-                scale: Some(0.1),
-                offset: None,
-                unit: "V".into(),
-                access: Access::R,
-                poll_group: Some("fast".into()),
-                bits: BTreeMap::new(),
-                min: None,
-                max: None,
-                step: None,
-                value_enum: Vec::new(),
-            },
-            PointDef {
-                id: "energy".into(),
-                name: "有功电度".into(),
-                register: "40200".parse().unwrap(),
-                data_type: hmi_domain::codec::DataType::U32,
-                byte_order: Some(hmi_domain::codec::ByteOrder::Cdab),
-                scale: Some(0.01),
-                offset: None,
-                unit: "kWh".into(),
-                access: Access::R,
-                poll_group: Some("slow".into()),
-                bits: BTreeMap::new(),
-                min: None,
-                max: None,
-                step: None,
-                value_enum: Vec::new(),
-            },
-            PointDef {
-                id: "status".into(),
-                name: "状态字".into(),
-                register: "40110".parse().unwrap(),
-                data_type: hmi_domain::codec::DataType::U16,
-                byte_order: None,
-                scale: None,
-                offset: None,
-                unit: String::new(),
-                access: Access::R,
-                poll_group: Some("fast".into()),
-                bits,
-                min: None,
-                max: None,
-                step: None,
-                value_enum: Vec::new(),
-            },
-            PointDef {
-                id: "setpoint".into(),
-                name: "设定值".into(),
-                register: "40300".parse().unwrap(),
-                data_type: hmi_domain::codec::DataType::U16,
-                byte_order: None,
-                scale: None,
-                offset: None,
-                unit: String::new(),
-                access: Access::Rw,
-                poll_group: None,
-                bits: BTreeMap::new(),
-                min: None,
-                max: None,
-                step: None,
-                value_enum: Vec::new(),
-            },
-        ],
-    }
+fn write_pkg(data_dir: &Path) {
+    let dir = data_dir.join("packages/com.test.meter/1.0.0");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("manifest.json"),
+        json!({
+            "schemaVersion": 2,
+            "id": "com.test.meter",
+            "name": "测试电表",
+            "version": "1.0.0",
+            "protocol": { "driver": "modbus", "params": { "byteOrder": "abcd" } }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("points.json"),
+        json!({
+            "pollGroups": [{ "name": "fast", "intervalMs": 100 }],
+            "points": [
+                { "id": "uab", "name": "AB线电压", "address": "40101", "type": "u16",
+                  "scale": 0.1, "unit": "V", "pollGroup": "fast" },
+                { "id": "energy", "name": "电度", "address": "40200", "type": "u32",
+                  "byteOrder": "cdab", "scale": 0.01, "unit": "kWh", "pollGroup": "fast" },
+                { "id": "status", "name": "状态字", "address": "40110", "type": "u16",
+                  "pollGroup": "fast", "bits": { "0": { "name": "运行" } } },
+                { "id": "setpoint", "name": "设定值", "address": "40310", "type": "u16",
+                  "scale": 0.1, "access": "rw", "min": 0, "max": 100, "step": 0.1,
+                  "pollGroup": "fast" }
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
 }
 
-fn channel_cfg() -> SerialChannelConfig {
-    SerialChannelConfig {
-        id: "ch1".into(),
+fn sim_channel() -> ChannelConfig {
+    ChannelConfig {
+        id: "sim1".into(),
         name: "测试总线".into(),
-        port: "SIM".into(),
-        hw_id: None,
-        baud_rate: 9600,
-        data_bits: 8,
-        parity: Parity::None,
-        stop_bits: 1,
-        resp_timeout_ms: 120,
-        retries: 2,
-        inter_frame_gap_ms: 1,
+        timing: ChannelTiming {
+            resp_timeout_ms: 100,
+            retries: 1,
+            probe_interval_ms: 150,
+        },
+        transport: TransportConfig::Sim(SimParams { seed: None }),
     }
 }
 
-fn device_cfg(id: &str, slave: u8) -> DeviceConfig {
+fn device(id: &str, address: u32) -> DeviceConfig {
     DeviceConfig {
         id: id.into(),
-        name: String::new(),
-        channel_id: "ch1".into(),
-        package: "test.pkg".into(),
-        slave,
+        name: id.into(),
+        channel_id: "sim1".into(),
+        package: "com.test.meter".into(),
+        address: address.into(),
         overrides: Default::default(),
     }
 }
 
-/// 组装一条"共享虚拟总线"通道（两个设备挂同一总线）。
-async fn start_channel() -> (
-    Arc<TagHub>,
-    tokio::sync::broadcast::Receiver<GatewayEvent>,
-    Arc<SimSlave>,
-    hmi_gateway::ChannelHandle,
-) {
-    let (transport, endpoint) = sim_pair();
+#[tokio::test]
+async fn poll_write_and_offline_recovery() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_pkg(tmp.path());
+
     let slave = Arc::new(
         SimSlave::new()
-            .set_holding(100, 2200) // uab → 220.0
-            .set_holding(109, 0x2001) // 40110 状态字：b0=1, b13=1
-            .set_holding(199, 0x0064) // energy cdab: 低字 100
-            .set_holding(200, 0x2710), // energy cdab: 高字 10000 → u32=0x27100064 → *0.01
+            .set_holding(100, 2201) // 40101 → 220.1 V
+            .set_holding(199, 0x2710) // 40200 低字
+            .set_holding(200, 0x0000) // 40200 高字（cdab）→ 10000 → 100.00 kWh
+            .set_holding(109, 1) // 40110 状态字
+            .set_holding(309, 250), // 40310 设定值
     );
-    spawn_slave_endpoint(endpoint, slave.clone());
-
-    let hub = Arc::new(TagHub::new());
-    let (events_tx, events_rx) = tokio::sync::broadcast::channel(64);
-
-    let driver = Arc::new(ModbusRtuDriver::new());
-    let table = pm_like_table();
-    let mut devices = Vec::new();
-    for (id, slave_addr) in [("pm1", 1u8), ("pm2", 2u8)] {
-        let cfg = device_cfg(id, slave_addr);
-        let plan = compile(id, &cfg.overrides, &table, &ProtocolDefaults::default()).unwrap();
-        let all_tags = plan.groups.iter().flat_map(|g| g.all_tags()).collect();
-        devices.push(DeviceRuntime {
-            device_id: id.into(),
-            slave: slave_addr,
-            driver: driver.clone(),
-            plan,
-            all_tags,
-        });
-    }
-
-    // opener 每次返回同一共享总线（SIM 语义）
-    let shared: Arc<dyn hmi_domain::transport::BusTransport> = Arc::new(transport);
-    let opener: BusOpener =
-        Arc::new(move |_cfg| Ok(Box::new(hmi_gateway::supervisor::SharedBus(shared.clone()))));
-
-    let rt = ChannelRuntime {
-        cfg: channel_cfg(),
-        devices,
-        open_bus: opener,
-        hub: hub.clone(),
-        events: events_tx,
-    };
-    let handle = spawn_channel(rt, 32);
-    (hub, events_rx, slave, handle)
-}
-
-/// 轮询 hub 直到 tag 满足条件或超时。
-async fn wait_tag(
-    hub: &TagHub,
-    tag: &str,
-    pred: impl Fn(&hmi_domain::value::TagSnapshot) -> bool,
-) -> hmi_domain::value::TagSnapshot {
-    let id = TagId::new(tag);
-    for _ in 0..200 {
-        if let Some(s) = hub.get(&id) {
-            if pred(&s) {
-                return s;
-            }
+    let offline9 = Arc::new(AtomicBool::new(true));
+    let slave2 = slave.clone();
+    let offline2 = offline9.clone();
+    let responder: SimResponder = Arc::new(move |req: &[u8]| {
+        if req.first() == Some(&9) && offline2.load(Ordering::Relaxed) {
+            None
+        } else {
+            slave2.respond_rtu(req)
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    panic!("等待 tag {tag} 超时，当前: {:?}", hub.get(&id));
-}
-
-#[tokio::test]
-async fn full_loop_values_and_quality() {
-    let (hub, _events, _slave, _handle) = start_channel().await;
-
-    // 快组：电压缩放
-    let s = wait_tag(&hub, "pm1.uab", |s| s.quality == Quality::Good).await;
-    assert_eq!(s.value, Value::F64(220.0));
-
-    // 状态字位展开
-    let s = wait_tag(&hub, "pm1.status.b0", |s| s.quality == Quality::Good).await;
-    assert_eq!(s.value, Value::Bool(true));
-
-    // 慢组：u32 cdab 字节序 + 缩放
-    // words = [0x0064, 0x2710]（40200 低字在前）→ cdab → u32 0x27100064 = 655360100 → *0.01
-    let s = wait_tag(&hub, "pm1.energy", |s| s.quality == Quality::Good).await;
-    assert_eq!(s.value, Value::F64(655360100.0 * 0.01));
-
-    // 第二台设备同样在采
-    let s = wait_tag(&hub, "pm2.uab", |s| s.quality == Quality::Good).await;
-    assert_eq!(s.value, Value::F64(220.0));
-}
-
-#[tokio::test]
-async fn comm_lost_and_recovery() {
-    let (hub, mut events, slave, _handle) = start_channel().await;
-    wait_tag(&hub, "pm1.uab", |s| s.quality == Quality::Good).await;
-
-    // 掉线（不应答）→ 重试耗尽 → CommLost
-    slave.set_online(false);
-    let s = wait_tag(&hub, "pm1.uab", |s| s.quality == Quality::CommLost).await;
-    // 保留最后好值
-    assert_eq!(s.value, Value::F64(220.0));
-
-    // 收到设备离线事件
-    let mut saw_offline = false;
-    while let Ok(ev) = events.try_recv() {
-        if let GatewayEvent::DeviceOnline { online: false, .. } = ev {
-            saw_offline = true;
-        }
-    }
-    assert!(saw_offline, "应收到 DeviceOnline(false) 事件");
-
-    // 恢复 → 探测成功 → 回 Good
-    slave.set_online(true);
-    let s = wait_tag(&hub, "pm1.uab", |s| s.quality == Quality::Good).await;
-    assert_eq!(s.value, Value::F64(220.0));
-}
-
-#[tokio::test]
-async fn bad_slave_does_not_block_good_one() {
-    // 自定义应答器：从站 2 掉线（不应答），从站 1 正常
-    let (transport, endpoint) = sim_pair();
-    let slave = Arc::new(SimSlave::new().set_holding(100, 2200));
-    let pm2_alive = Arc::new(AtomicBool::new(true));
-    let flag = pm2_alive.clone();
-    tokio::spawn(async move {
-        endpoint
-            .run(move |req| {
-                if req[0] == 2 && !flag.load(Ordering::Relaxed) {
-                    return None; // 从站 2 不应答
-                }
-                slave.respond(req)
-            })
-            .await;
     });
+    let r2 = responder.clone();
+    let factory = Arc::new(SimFactory::new(Arc::new(move |_ch: &ChannelConfig| {
+        r2.clone()
+    })));
 
-    let hub = Arc::new(TagHub::new());
-    let (events_tx, _events_rx) = tokio::sync::broadcast::channel(64);
-    let driver = Arc::new(ModbusRtuDriver::new());
-    let table = pm_like_table();
-    let mut devices = Vec::new();
-    for (id, slave_addr) in [("pm1", 1u8), ("pm2", 2u8)] {
-        let plan = compile(
-            id,
-            &Default::default(),
-            &table,
-            &ProtocolDefaults::default(),
-        )
-        .unwrap();
-        let all_tags = plan.groups.iter().flat_map(|g| g.all_tags()).collect();
-        devices.push(DeviceRuntime {
-            device_id: id.into(),
-            slave: slave_addr,
-            driver: driver.clone(),
-            plan,
-            all_tags,
-        });
-    }
-    let shared: Arc<dyn hmi_domain::transport::BusTransport> = Arc::new(transport);
-    let opener: BusOpener =
-        Arc::new(move |_cfg| Ok(Box::new(hmi_gateway::supervisor::SharedBus(shared.clone()))));
-    let handle = spawn_channel(
-        ChannelRuntime {
-            cfg: channel_cfg(),
-            devices,
-            open_bus: opener,
-            hub: hub.clone(),
-            events: events_tx,
-        },
-        32,
-    );
-    let _ = handle;
+    let drivers: Vec<Arc<dyn Driver>> = vec![Arc::new(ModbusDriver::new())];
+    let svc =
+        GatewayService::new(tmp.path(), Version::new(0, 1, 0), drivers, vec![factory]).unwrap();
+    svc.upsert_channel(sim_channel()).await.unwrap();
+    svc.add_device(device("pm1", 1)).await.unwrap();
+    svc.add_device(device("pm9", 9)).await.unwrap();
+    svc.start().await.unwrap();
 
-    wait_tag(&hub, "pm1.uab", |s| s.quality == Quality::Good).await;
-    wait_tag(&hub, "pm2.uab", |s| s.quality == Quality::Good).await;
-
-    // pm2 掉线
-    pm2_alive.store(false, Ordering::Relaxed);
-    wait_tag(&hub, "pm2.uab", |s| s.quality == Quality::CommLost).await;
-
-    // pm1 持续刷新：时间戳在 800ms 观察窗内持续推进（fast 组 100ms 周期）
-    let mut last_ts = 0u64;
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(800);
-    while tokio::time::Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(120)).await;
-        if let Some(s) = hub.get(&TagId::new("pm1.uab")) {
-            assert_eq!(s.quality, Quality::Good, "好设备不应被坏设备拖下水");
-            assert!(s.ts_ms >= last_ts, "pm1 时间戳应推进");
-            last_ts = s.ts_ms;
+    let mut ok = false;
+    for _ in 0..100 {
+        if svc
+            .current_value("pm1.uab")
+            .is_some_and(|v| v.quality == Quality::Good)
+        {
+            ok = true;
+            break;
         }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    assert!(last_ts > 0, "pm1 应持续有新数据");
-}
+    assert!(ok, "等待 pm1.uab good 超时");
 
-#[tokio::test]
-async fn write_via_channel_cmd() {
-    let (hub, _events, slave, handle) = start_channel().await;
-    wait_tag(&hub, "pm1.uab", |s| s.quality == Quality::Good).await;
+    let v = svc.current_value("pm1.uab").unwrap().value;
+    match v {
+        Value::F64(f) => assert!((f - 220.1).abs() < 1e-9, "{f}"),
+        other => panic!("期望 F64，得到 {other:?}"),
+    }
+    assert_eq!(
+        svc.current_value("pm1.energy").unwrap().value,
+        Value::F64(100.0)
+    );
+    assert_eq!(
+        svc.current_value("pm1.status.b0").unwrap().value,
+        Value::Bool(true)
+    );
 
-    let driver = Arc::new(ModbusRtuDriver::new());
-    handle
-        .write_regs(driver, 1, 299, vec![1234]) // 40300 → offset 299
+    // 坏设备离线，不阻塞好设备
+    let mut pm9_offline = false;
+    for _ in 0..100 {
+        let snap = svc.snapshot().await;
+        if snap
+            .devices
+            .iter()
+            .find(|d| d.config.id == "pm9")
+            .is_some_and(|d| !d.online)
+        {
+            pm9_offline = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(pm9_offline, "等待 pm9 offline 超时");
+    assert!(svc.is_good("pm1.uab"), "坏设备不应阻塞好设备");
+
+    // 写点：30.0 → 原始 300
+    svc.write_tag("pm1.setpoint", Value::F64(30.0))
         .await
         .unwrap();
-    assert_eq!(slave.holding_value(299), Some(1234));
+    assert_eq!(slave.holding_value(309), Some(300));
 
-    // 轮询把新值带回来
-    let s = wait_tag(&hub, "pm1.setpoint", |s| {
-        s.quality == Quality::Good && s.value == Value::I64(1234)
-    })
-    .await;
-    assert_eq!(s.value, Value::I64(1234));
-}
+    // 步长校验
+    assert!(svc
+        .write_tag("pm1.setpoint", Value::F64(30.05))
+        .await
+        .is_err());
+    // 只读点
+    assert!(svc.write_tag("pm1.uab", Value::F64(1.0)).await.is_err());
 
-#[tokio::test]
-async fn config_store_roundtrip() {
-    use hmi_gateway::store::JsonConfigStore;
-    let dir = tempfile::tempdir().unwrap();
-    let store = JsonConfigStore::new(dir.path().join("config.json"));
-    let mut cfg = ProjectConfig::default();
-    cfg.channels.push(channel_cfg());
-    cfg.devices.push(device_cfg("pm1", 1));
-    store.save(&cfg).unwrap();
-    let back = store.load().unwrap();
-    assert_eq!(back.channels.len(), 1);
-    assert_eq!(back.devices[0].slave, 1);
+    // 设备 9 恢复应答 → 探测恢复在线
+    offline9.store(false, Ordering::Relaxed);
+    let mut pm9_online = false;
+    for _ in 0..100 {
+        let snap = svc.snapshot().await;
+        if snap
+            .devices
+            .iter()
+            .find(|d| d.config.id == "pm9")
+            .is_some_and(|d| d.online)
+        {
+            pm9_online = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(pm9_online, "等待 pm9 recovered 超时");
 }

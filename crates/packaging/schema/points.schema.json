@@ -24,7 +24,7 @@
   "definitions": {
     "point": {
       "type": "object",
-      "required": ["id", "register"],
+      "required": ["id", "address"],
       "additionalProperties": true,
       "properties": {
         "id": {
@@ -33,9 +33,18 @@
           "description": "点内唯一标识；tag 全名 = <设备id>.<pointId>"
         },
         "name": { "type": "string", "description": "显示名" },
-        "register": {
-          "type": "string",
-          "description": "Modbus 地址：工程记法（40101/30001/00010/10010，或 6 位 400001）或显式记法（HR:100/IR:5/C:3/DR:7）"
+        "address": {
+          "description": "协议地址：寄存器类协议用字符串，其他协议用驱动私有的对象",
+          "oneOf": [
+            {
+              "type": "string",
+              "description": "Modbus 地址：工程记法（40101/30001/00010/10010，或 6 位 400001）或显式记法（HR:100/IR:5/C:3/DR:7）"
+            },
+            {
+              "type": "object",
+              "description": "驱动私有地址对象，如 BLE 的 { \"ble\": { \"service\": \"...\", \"characteristic\": \"...\" } }"
+            }
+          ]
         },
         "type": {
           "enum": ["u16", "i16", "u32", "i32", "u64", "f32", "f64", "bcd16", "bcd32"],
@@ -77,7 +86,7 @@
           "type": "object",
           "description": "状态字位展开：位号(0-15) → 定义；生成 <point>.b<N> 子 tag",
           "patternProperties": {
-            "^(1?[0-9])$": {
+            "^([0-9]|1[0-5])$": {
               "type": "object",
               "required": ["name"],
               "properties": {

@@ -2,7 +2,7 @@
 //!
 //! 用户全程只填表单；这里负责生成 v2 页面（widgets[]）、点表与校验所需的 JSON。
 
-import type { Access, DataType, RegArea, WidgetRect } from '@/api/types'
+import type { Access, ByteOrder, DataType, RegArea, WidgetRect } from '@/api/types'
 
 export interface DraftBit {
   bit: number | null
@@ -21,7 +21,8 @@ export interface DraftPoint {
   key: string
   id: string
   name: string
-  register: string
+  address: string
+  byteOrder: ByteOrder
   type: DataType
   access: Access
   scale: number | null
@@ -111,13 +112,17 @@ function nextKey(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${seq.toString(36)}`
 }
 
-/** 工程记法地址 → 数据区（0x 线圈 / 1x 离散 / 3x 输入 / 4x 保持）。 */
-export function areaOfRegister(register: string): RegArea | null {
-  const r = register.trim().toUpperCase()
-  if (/^CO:/.test(r)) return 'coil'
-  if (/^DI:/.test(r)) return 'discrete'
+/** 寄存器地址 → 数据区（0x 线圈 / 1x 离散 / 3x 输入 / 4x 保持）。 */
+export function areaOfRegister(address: string): RegArea | null {
+  const r = address.trim().toUpperCase()
+  if (/^C:/.test(r)) return 'coil'
+  if (/^DR:/.test(r)) return 'discrete'
   if (/^IR:/.test(r)) return 'input'
   if (/^HR:/.test(r)) return 'holding'
+  if (/^0X/.test(r)) return 'coil'
+  if (/^1X/.test(r)) return 'discrete'
+  if (/^3X/.test(r)) return 'input'
+  if (/^4X/.test(r)) return 'holding'
   const first = r.charAt(0)
   if (!/^\d+$/.test(r)) return null
   if (first === '0') return 'coil'
@@ -127,14 +132,14 @@ export function areaOfRegister(register: string): RegArea | null {
   return null
 }
 
-export function isBitArea(register: string): boolean {
-  const area = areaOfRegister(register)
+export function isBitArea(address: string): boolean {
+  const area = areaOfRegister(address)
   return area === 'coil' || area === 'discrete'
 }
 
 export function emptyDraft(): PackageDraft {
   return {
-    meta: { id: '', name: '', vendor: '', version: '0.1.0', description: '', driver: 'modbus-rtu' },
+    meta: { id: '', name: '', vendor: '', version: '0.1.0', description: '', driver: 'modbus' },
     pollGroups: [{ name: 'fast', intervalMs: 1000 }],
     points: [],
     pages: [{ id: 'overview', title: '设备概览', icon: 'pulse', widgets: [] }],
@@ -146,7 +151,8 @@ export function newPoint(index: number): DraftPoint {
     key: nextKey('p'),
     id: `point${index + 1}`,
     name: '',
-    register: String(40101 + index * 1),
+    address: String(40101 + index * 1),
+    byteOrder: 'abcd',
     type: 'u16',
     access: 'r',
     scale: null,
@@ -240,7 +246,7 @@ function widgetBind(w: DraftWidget): Record<string, unknown> | null {
 
 export function buildManifest(draft: PackageDraft): Record<string, unknown> {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: draft.meta.id.trim(),
     name: draft.meta.name.trim(),
     vendor: draft.meta.vendor.trim(),
@@ -248,7 +254,8 @@ export function buildManifest(draft: PackageDraft): Record<string, unknown> {
     version: draft.meta.version.trim() || '0.1.0',
     protocol: {
       driver: draft.meta.driver,
-      defaults: { byteOrder: 'abcd', respTimeoutMs: 150 },
+      transports: ['serial', 'tcp', 'sim'],
+      params: { framing: 'auto', byteOrder: 'abcd' },
     },
     ui: {
       pages: draft.pages.map((page) => ({
@@ -295,12 +302,12 @@ export function buildPoints(draft: PackageDraft): Record<string, unknown> {
     points: draft.points
       .filter((p) => p.id.trim())
       .map((p) => {
-        const bitArea = isBitArea(p.register)
+        const bitArea = isBitArea(p.address)
         return {
           id: p.id.trim(),
           name: p.name.trim() || p.id.trim(),
-          register: p.register.trim(),
-          ...(bitArea ? {} : { type: p.type }),
+          address: p.address.trim(),
+          ...(bitArea ? {} : { type: p.type, byteOrder: p.byteOrder }),
           access: p.access,
           ...(!bitArea && p.scale != null ? { scale: p.scale } : {}),
           ...(!bitArea && p.offset != null ? { offset: p.offset } : {}),
@@ -355,7 +362,7 @@ function pointLabel(p: DraftPoint): string {
  * - 实时点表：core:tags（代码型复合组件，作为兜底页）
  */
 export function presetPages(draft: PackageDraft): DraftPage[] {
-  const numeric = draft.points.filter((p) => p.id.trim() && !isBitArea(p.register))
+  const numeric = draft.points.filter((p) => p.id.trim() && !isBitArea(p.address))
   const writable = numeric.filter((p) => p.access === 'rw')
   const bitPoints = numeric.filter((p) => p.bits.length)
 

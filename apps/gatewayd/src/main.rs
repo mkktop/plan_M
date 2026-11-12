@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use hmi_gatewayd::{cmd_pkg, cmd_poll, cmd_scan, default_data_dir, logging, serve};
+use hmi_gatewayd::{cmd_pkg, cmd_poll, cmd_scan, default_data_dir, logging, serve, sim_tcp};
 
 #[derive(Parser)]
 #[command(
@@ -29,17 +29,26 @@ enum Cmd {
         #[arg(long)]
         sim: bool,
     },
-    /// 直接轮询一个设备包并打印（调试利器，--com SIM 可无硬件运行）
+    /// 直接轮询一个设备包并打印（--transport sim 可无硬件运行）
     Poll {
         /// 设备包目录
         #[arg(long)]
         package: std::path::PathBuf,
-        /// 串口名（如 COM3），或 SIM
+        /// 传输类型
+        #[arg(long, value_enum, default_value = "serial")]
+        transport: cmd_poll::TransportArg,
+        /// 串口名（如 COM3）
         #[arg(long)]
-        com: String,
-        /// 从站地址
+        com: Option<String>,
+        /// TCP 网关地址
+        #[arg(long)]
+        host: Option<String>,
+        /// TCP 端口
+        #[arg(long, default_value_t = 502)]
+        tcp_port: u16,
+        /// 设备地址（Modbus 从站号）
         #[arg(long, default_value_t = 1)]
-        slave: u8,
+        address: u32,
         #[arg(long, default_value_t = 9600)]
         baud: u32,
         /// 轮询周期（毫秒）
@@ -49,16 +58,28 @@ enum Cmd {
         #[arg(long)]
         once: bool,
     },
-    /// 扫描总线上的从站
+    /// 扫描链路设备地址
     Scan {
+        #[arg(long, value_enum, default_value = "serial")]
+        transport: cmd_poll::TransportArg,
         #[arg(long)]
-        com: String,
+        com: Option<String>,
+        #[arg(long)]
+        host: Option<String>,
+        #[arg(long, default_value_t = 502)]
+        tcp_port: u16,
         #[arg(long, default_value_t = 9600)]
         baud: u32,
         #[arg(long, default_value_t = 1)]
-        from: u8,
+        from: u32,
         #[arg(long, default_value_t = 247)]
-        to: u8,
+        to: u32,
+    },
+    /// 起一个本地 Modbus TCP 演示从站（无硬件验证 WiFi/TCP 通道）
+    SimTcp {
+        /// 监听地址
+        #[arg(long, default_value = "127.0.0.1:15020")]
+        listen: std::net::SocketAddr,
     },
     /// 设备包管理
     Pkg {
@@ -119,16 +140,22 @@ async fn main() -> Result<()> {
         }
         Cmd::Poll {
             package,
+            transport,
             com,
-            slave,
+            host,
+            tcp_port,
+            address,
             baud,
             interval_ms,
             once,
         } => {
             cmd_poll::run(cmd_poll::PollArgs {
                 package: package.clone(),
+                transport: *transport,
                 com: com.clone(),
-                slave: *slave,
+                host: host.clone(),
+                tcp_port: *tcp_port,
+                address: *address,
                 baud: *baud,
                 interval_ms: *interval_ms,
                 once: *once,
@@ -136,19 +163,26 @@ async fn main() -> Result<()> {
             .await
         }
         Cmd::Scan {
+            transport,
             com,
+            host,
+            tcp_port,
             baud,
             from,
             to,
         } => {
             cmd_scan::run(cmd_scan::ScanArgs {
+                transport: *transport,
                 com: com.clone(),
+                host: host.clone(),
+                tcp_port: *tcp_port,
                 baud: *baud,
                 from: *from,
                 to: *to,
             })
             .await
         }
+        Cmd::SimTcp { listen } => sim_tcp::run(*listen).await,
         Cmd::Pkg { cmd } => {
             let c = match cmd {
                 PkgCli::Validate { path } => cmd_pkg::PkgCmd::Validate { path: path.clone() },

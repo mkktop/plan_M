@@ -54,14 +54,14 @@ watch(
         刷新串口
       </n-button>
     </div>
-    <div v-if="project.serialPorts.length" class="port-list">
-      <div v-for="p in project.serialPorts" :key="p.portName" class="port-row">
-        <div class="port-name mono">{{ p.portName }}</div>
+    <div v-if="(project.targets.serial ?? []).length" class="port-list">
+      <div v-for="p in project.targets.serial ?? []" :key="p.id" class="port-row">
+        <div class="port-name mono">{{ p.id }}</div>
         <div class="port-desc">
           <span>{{ p.description || '串行设备' }}</span>
           <code v-if="p.hwId" class="hw-id">{{ p.hwId }}</code>
         </div>
-        <n-button size="tiny" @click="emit('use', p.portName)">用此口建通道</n-button>
+        <n-button size="tiny" @click="emit('use', p.id)">用此口建通道</n-button>
       </div>
     </div>
     <div v-else class="port-empty muted">

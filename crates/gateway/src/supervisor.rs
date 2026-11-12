@@ -1,55 +1,45 @@
-//! 通道监督器：一条 485 总线（一个串口）的全生命周期。
+//! 通道监督器：一条 Link（串口/TCP/SIM/BLE）的全生命周期。
 //!
 //! 职责：
-//! - 总线打开 / 断线重连（指数退避，封顶 5s；期间通道内全部 tag → CommLost）
-//! - 事务严格串行（半双工总线的硬约束——单任务独占总线天然保证）
-//! - 轮询调度：按组周期执行"读块"事务，解码写 TagHub
-//! - 重试与从站离线：单事务超时/协议错重试 N 次，超限标记离线、定期探测恢复；
-//!   一台坏设备不阻塞同总线其他设备
+//! - 异步打开/断线重连（指数退避，封顶 5s；期间通道内全部 tag → CommLost）
+//! - 事务严格串行（半双工/单连接硬约束）
+//! - 轮询调度：按驱动编译出的组周期执行 `Driver::poll`
+//! - 错误分类：链路死亡 → 重连；设备级错误 → 重试 → 离线 → 周期探测
 //! - 外部命令（写点/探测）插入事务队列执行
 //!
-//! 总线打开策略由外部注入（`BusOpener`），本 crate 不知道串口细节——
-//! 测试注入虚拟总线，gatewayd 注入串口/SIM 工厂。
+//! 本模块只认识 `TransportFactory` 与 `Driver` 端口，不知道 Modbus/串口细节。
 
 use crate::hub::TagHub;
-use crate::poll::{DevicePollPlan, PollGroupPlan};
-use hmi_domain::config::SerialChannelConfig;
-use hmi_domain::driver::{Driver, DriverError};
-use hmi_domain::transport::{BusError, BusTransport};
-use hmi_domain::value::TagId;
+use hmi_domain::config::{ChannelConfig, DeviceAddress};
+use hmi_domain::driver::{DevicePlan, Driver, PollClass, PollGroup, Sample};
+use hmi_domain::link::{Link, TransportFactory};
+use hmi_domain::points::PointDef;
+use hmi_domain::protocol::ProtocolDecl;
+use hmi_domain::value::{now_ms, Quality, TagId, TagSnapshot, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use thiserror::Error;
-use tokio::sync::{mpsc, oneshot};
-
-/// 打开总线的工厂：入参为通道配置（串口参数/SIM 标记都在里面），
-/// 每次重连调用一次；返回 Err 表示本次打开失败（原因可读）。
-pub type BusOpener =
-    Arc<dyn Fn(&SerialChannelConfig) -> Result<Box<dyn BusTransport>, String> + Send + Sync>;
+use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::task::JoinHandle;
 
 /// 注入给监督器的命令。
 pub enum SupervisorCmd {
-    WriteRegs {
-        slave: u8,
-        start: u16,
-        words: Vec<u16>,
+    Write {
         driver: Arc<dyn Driver>,
-        resp: oneshot::Sender<Result<(), String>>,
-    },
-    WriteCoil {
-        slave: u8,
-        bit: u16,
-        value: bool,
-        driver: Arc<dyn Driver>,
+        address: DeviceAddress,
+        point: Box<PointDef>,
+        value: Value,
+        protocol: ProtocolDecl,
         resp: oneshot::Sender<Result<(), String>>,
     },
     Probe {
-        slave: u8,
         driver: Arc<dyn Driver>,
+        address: DeviceAddress,
+        protocol: ProtocolDecl,
         resp: oneshot::Sender<bool>,
     },
-    /// 停止通道（释放串口）
+    /// 停止通道（释放连接）
     Stop,
 }
 
@@ -103,39 +93,41 @@ pub enum GatewayEvent {
     },
 }
 
-/// 一个设备的运行时物料：从站地址 + 驱动 + 编译好的计划 + 全部 tag。
-/// 驱动跟随设备包声明 —— 同一条总线上允许混协议设备。
+/// 一个设备的运行时物料。
 pub struct DeviceRuntime {
     pub device_id: String,
-    pub slave: u8,
+    pub address: DeviceAddress,
     pub driver: Arc<dyn Driver>,
-    pub plan: DevicePollPlan,
+    /// 设备包的协议声明（写点/探测时解析驱动私有参数）
+    pub protocol: ProtocolDecl,
+    pub plan: DevicePlan,
     pub all_tags: Vec<TagId>,
 }
 
 /// 通道运行时物料。
 pub struct ChannelRuntime {
-    pub cfg: SerialChannelConfig,
+    pub config: ChannelConfig,
     pub devices: Vec<DeviceRuntime>,
-    pub open_bus: BusOpener,
+    pub factory: Arc<dyn TransportFactory>,
     pub hub: Arc<TagHub>,
-    pub events: tokio::sync::broadcast::Sender<GatewayEvent>,
+    pub events: broadcast::Sender<GatewayEvent>,
 }
 
 #[derive(Error, Debug)]
 enum PollFailure {
-    /// 从站级故障（超时/协议错，重试耗尽）→ 标记该从站离线
-    #[error("slave down: {0}")]
-    SlaveDown(String),
-    /// 总线级故障（串口 I/O 错误）→ 重连
-    #[error("bus dead: {0}")]
-    BusDead(String),
+    #[error("link dead: {0}")]
+    LinkDead(String),
+    #[error("device down: {0}")]
+    DeviceDown(String),
+    #[error("device fatal: {0}")]
+    DeviceFatal(String),
 }
 
+#[derive(Clone, Copy)]
 struct Slot {
     device: usize,
     group: usize,
-    next: tokio::time::Instant,
+    next: Instant,
 }
 
 /// 通道句柄。
@@ -143,6 +135,7 @@ struct Slot {
 pub struct ChannelHandle {
     pub tx: mpsc::Sender<SupervisorCmd>,
     pub shared: Arc<ChannelShared>,
+    join: Arc<std::sync::Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl ChannelHandle {
@@ -150,41 +143,31 @@ impl ChannelHandle {
         self.shared.state()
     }
 
-    pub async fn write_regs(
-        &self,
-        driver: Arc<dyn Driver>,
-        slave: u8,
-        start: u16,
-        words: Vec<u16>,
-    ) -> Result<(), String> {
-        let (tx, rx) = oneshot::channel();
-        self.tx
-            .send(SupervisorCmd::WriteRegs {
-                slave,
-                start,
-                words,
-                driver,
-                resp: tx,
-            })
-            .await
-            .map_err(|_| "通道已停止".to_string())?;
-        rx.await.map_err(|_| "通道无应答".to_string())?
+    /// 停止通道并等待监督器任务退出（释放串口/连接，避免重开竞态）。
+    pub async fn stop(&self) {
+        let _ = self.tx.send(SupervisorCmd::Stop).await;
+        let handle = self.join.lock().unwrap().take();
+        if let Some(h) = handle {
+            let _ = tokio::time::timeout(Duration::from_secs(2), h).await;
+        }
     }
 
-    pub async fn write_coil(
+    pub async fn write(
         &self,
         driver: Arc<dyn Driver>,
-        slave: u8,
-        bit: u16,
-        value: bool,
+        address: DeviceAddress,
+        point: PointDef,
+        value: Value,
+        protocol: ProtocolDecl,
     ) -> Result<(), String> {
         let (tx, rx) = oneshot::channel();
         self.tx
-            .send(SupervisorCmd::WriteCoil {
-                slave,
-                bit,
+            .send(SupervisorCmd::Write {
+                driver,
+                address,
+                point: Box::new(point),
                 value,
-                driver,
+                protocol,
                 resp: tx,
             })
             .await
@@ -192,17 +175,27 @@ impl ChannelHandle {
         rx.await.map_err(|_| "通道无应答".to_string())?
     }
 
-    pub async fn probe(&self, driver: Arc<dyn Driver>, slave: u8) -> Result<bool, String> {
+    pub async fn probe(
+        &self,
+        driver: Arc<dyn Driver>,
+        address: DeviceAddress,
+        protocol: ProtocolDecl,
+    ) -> bool {
         let (tx, rx) = oneshot::channel();
-        self.tx
+        if self
+            .tx
             .send(SupervisorCmd::Probe {
-                slave,
                 driver,
+                address,
+                protocol,
                 resp: tx,
             })
             .await
-            .map_err(|_| "通道已停止".to_string())?;
-        rx.await.map_err(|_| "通道无应答".to_string())
+            .is_err()
+        {
+            return false;
+        }
+        rx.await.unwrap_or(false)
     }
 }
 
@@ -215,292 +208,349 @@ pub fn spawn_channel(rt: ChannelRuntime, cmd_capacity: usize) -> ChannelHandle {
             .collect::<Vec<_>>(),
     );
     let (tx, rx) = mpsc::channel(cmd_capacity);
+    let join = Arc::new(std::sync::Mutex::new(None));
     let handle = ChannelHandle {
-        tx: tx.clone(),
+        tx,
         shared: shared.clone(),
+        join: join.clone(),
     };
     let task_shared = shared.clone();
-    tokio::spawn(async move {
+    let h = tokio::spawn(async move {
         run_channel(rt, rx, task_shared).await;
     });
+    *join.lock().unwrap() = Some(h);
     handle
 }
 
 async fn run_channel(
     rt: ChannelRuntime,
-    mut cmd_rx: mpsc::Receiver<SupervisorCmd>,
+    mut rx: mpsc::Receiver<SupervisorCmd>,
     shared: Arc<ChannelShared>,
 ) {
-    let channel_id = rt.cfg.id.clone();
-    let timeout = Duration::from_millis(rt.cfg.resp_timeout_ms as u64);
-    let gap = Duration::from_millis(rt.cfg.inter_frame_gap_ms);
-    let retries = rt.cfg.retries;
-    let probe_timeout = Duration::from_millis((rt.cfg.resp_timeout_ms as f64 * 0.75) as u64);
-    let probe_interval = Duration::from_secs(5);
-
-    tracing::info!(channel = %channel_id, port = %rt.cfg.port, devices = rt.devices.len(), "通道启动");
-
+    let timeout = Duration::from_millis(rt.config.timing.resp_timeout_ms as u64);
+    let gap = rt.config.inter_frame_gap();
+    let retries = rt.config.timing.retries;
+    let probe_timeout = timeout.mul_f64(0.75);
+    let probe_interval = Duration::from_millis(rt.config.timing.probe_interval_ms);
+    let channel_id = rt.config.id.clone();
     let mut backoff = Duration::from_secs(1);
-    let mut marked_lost = false;
 
-    'outer: loop {
-        // —— 打开总线（失败 → 退避重试，命令仍可响应）——
-        let bus: Box<dyn BusTransport> = match (rt.open_bus)(&rt.cfg) {
-            Ok(b) => b,
-            Err(e) => {
-                if !marked_lost {
-                    mark_channel_lost(&rt, &shared);
-                    marked_lost = true;
-                }
-                shared.set_state("recovering");
-                emit_state(&rt, &channel_id, "recovering", &e);
-                match sleep_with_cmds(&mut cmd_rx, backoff).await {
-                    Flow::Continue => {}
-                    Flow::Stop => break 'outer,
+    loop {
+        shared.set_state("recovering");
+        let open_result = open_with_cmds(&rt.factory, &rt.config, &mut rx).await;
+        let link = match open_result {
+            OpenOutcome::Opened(link) => link,
+            OpenOutcome::Stop => {
+                shared.set_state("stopped");
+                return;
+            }
+            OpenOutcome::Failed(e) => {
+                tracing::warn!(channel = %channel_id, error = %e, "打开通道失败，退避重试");
+                mark_channel_lost(&rt, &shared);
+                if sleep_with_cmds(&mut rx, backoff, &shared).await {
+                    return;
                 }
                 backoff = (backoff * 2).min(Duration::from_secs(5));
                 continue;
             }
         };
-        marked_lost = false;
+        backoff = Duration::from_secs(1);
         shared.set_state("running");
-        emit_state(&rt, &channel_id, "running", "");
 
-        // —— 轮询主循环 ——
+        // 每个设备 × 每个轮询组一个槽位
         let mut slots: Vec<Slot> = Vec::new();
-        for (di, d) in rt.devices.iter().enumerate() {
-            for (gi, _) in d.plan.groups.iter().enumerate() {
+        for (di, dev) in rt.devices.iter().enumerate() {
+            for (gi, _) in dev.plan.groups.iter().enumerate() {
                 slots.push(Slot {
                     device: di,
                     group: gi,
-                    next: tokio::time::Instant::now(),
+                    next: Instant::now(),
                 });
             }
         }
-        let mut offline: Vec<bool> = vec![false; rt.devices.len()];
-        let mut next_probe = vec![tokio::time::Instant::now(); rt.devices.len()];
+        let mut offline = vec![false; rt.devices.len()];
+        let mut next_probe = vec![Instant::now(); rt.devices.len()];
 
-        let bus_ref = bus.as_ref();
-        loop {
-            let now = tokio::time::Instant::now();
+        let inner = loop {
+            let now = Instant::now();
             let next_due = slots
                 .iter()
                 .map(|s| s.next)
                 .min()
-                .unwrap_or(now + Duration::from_secs(1));
+                .unwrap_or(now + Duration::from_secs(3600));
 
             tokio::select! {
-                biased;
-                cmd = cmd_rx.recv() => {
+                cmd = rx.recv() => {
                     match cmd {
                         None | Some(SupervisorCmd::Stop) => {
                             shared.set_state("stopped");
-                            emit_state(&rt, &channel_id, "stopped", "");
-                            break 'outer;
+                            return;
                         }
-                        Some(SupervisorCmd::WriteRegs { slave, start, words, driver, resp }) => {
-                            let r = driver
-                                .write_registers(bus_ref, slave, start, &words, timeout)
+                        Some(SupervisorCmd::Write { driver, address, point, value, protocol, resp }) => {
+                            match driver
+                                .write(&*link, &address, &point, &value, &protocol, timeout)
                                 .await
-                                .map_err(|e| e.to_string());
-                            let _ = resp.send(r);
-                            tokio::time::sleep(gap).await;
+                            {
+                                Ok(()) => { let _ = resp.send(Ok(())); sleep_gap(gap).await; }
+                                Err(e) => {
+                                    let dead = e.poll_class() == PollClass::LinkDead;
+                                    let _ = resp.send(Err(e.to_string()));
+                                    if dead { break PollFailure::LinkDead(e.to_string()); }
+                                    sleep_gap(gap).await;
+                                }
+                            }
                         }
-                        Some(SupervisorCmd::WriteCoil { slave, bit, value, driver, resp }) => {
-                            let r = driver
-                                .write_coil(bus_ref, slave, bit, value, timeout)
+                        Some(SupervisorCmd::Probe { driver, address, protocol, resp }) => {
+                            let ok = driver
+                                .probe(&*link, &address, &protocol, probe_timeout)
                                 .await
-                                .map_err(|e| e.to_string());
-                            let _ = resp.send(r);
-                            tokio::time::sleep(gap).await;
-                        }
-                        Some(SupervisorCmd::Probe { slave, driver, resp }) => {
-                            let ok = driver.probe(bus_ref, slave, probe_timeout).await.is_ok();
+                                .is_ok();
                             let _ = resp.send(ok);
-                            tokio::time::sleep(gap).await;
+                            sleep_gap(gap).await;
                         }
                     }
                 }
-                _ = tokio::time::sleep_until(next_due) => {
-                    let mut now = tokio::time::Instant::now();
-                    // 一口气消化所有到期槽位
-                    loop {
-                        let due: Vec<usize> = (0..slots.len())
-                            .filter(|&i| slots[i].next <= now)
-                            .collect();
-                        if due.is_empty() {
-                            break;
+                _ = tokio::time::sleep_until(next_due.into()) => {
+                    // 执行所有到期槽位（单任务串行）
+                    let now = Instant::now();
+                    let mut failure: Option<PollFailure> = None;
+                    for idx in 0..slots.len() {
+                        if slots[idx].next > now {
+                            continue;
                         }
-                        for i in due {
-                            let di = slots[i].device;
-                            let gi = slots[i].group;
-                            let dev = &rt.devices[di];
-                            let group = &dev.plan.groups[gi];
+                        let dev = &rt.devices[slots[idx].device];
+                        let group = &dev.plan.groups[slots[idx].group];
 
-                            if offline[di] {
-                                if now >= next_probe[di] {
-                                    match dev.driver.probe(bus_ref, dev.slave, probe_timeout).await {
-                                        Ok(()) => {
-                                            offline[di] = false;
-                                            shared.set_device_online(&dev.device_id, true);
-                                            emit_online(&rt, &dev.device_id, true);
-                                            slots[i].next = now; // 立即恢复轮询
-                                            for s in slots.iter_mut().filter(|s| s.device == di) {
-                                                if s.next > now { s.next = now; }
-                                            }
-                                        }
-                                        Err(_) => {
-                                            next_probe[di] = now + probe_interval;
-                                            slots[i].next = next_probe[di];
-                                        }
+                        if offline[slots[idx].device] {
+                            if now >= next_probe[slots[idx].device] {
+                                match dev.driver.probe(&*link, &dev.address, &dev.protocol, probe_timeout).await {
+                                    Ok(()) => {
+                                        offline[slots[idx].device] = false;
+                                        shared.set_device_online(&dev.device_id, true);
+                                        let _ = rt.events.send(GatewayEvent::DeviceOnline {
+                                            device: dev.device_id.clone(),
+                                            online: true,
+                                        });
+                                        slots[idx].next = now;
                                     }
-                                } else {
-                                    slots[i].next = next_probe[di];
-                                }
-                                continue;
-                            }
-
-                            match exec_group(bus_ref, dev.driver.as_ref(), dev.slave, group, timeout, retries, gap).await {
-                                Ok(batch) => {
-                                    rt.hub.write(batch);
-                                    slots[i].next = now + group.interval;
-                                }
-                                Err(PollFailure::SlaveDown(why)) => {
-                                    tracing::warn!(
-                                        channel = %channel_id, device = %dev.device_id,
-                                        reason = %why, "从站离线（重试耗尽）"
-                                    );
-                                    offline[di] = true;
-                                    shared.set_device_online(&dev.device_id, false);
-                                    emit_online(&rt, &dev.device_id, false);
-                                    rt.hub.write(rt.hub.comm_lost_batch(&dev.all_tags));
-                                    next_probe[di] = now + probe_interval;
-                                    for s in slots.iter_mut().filter(|s| s.device == di) {
-                                        s.next = next_probe[di];
+                                    Err(e) if e.poll_class() == PollClass::LinkDead => {
+                                        failure = Some(PollFailure::LinkDead(e.to_string()));
+                                        break;
+                                    }
+                                    Err(_) => {
+                                        next_probe[slots[idx].device] = now + probe_interval;
+                                        slots[idx].next = now + probe_interval;
                                     }
                                 }
-                                Err(PollFailure::BusDead(e)) => {
-                                    tracing::error!(channel = %channel_id, error = %e, "总线故障，进入重连");
-                                    shared.set_state("recovering");
-                                    emit_state(&rt, &channel_id, "recovering", &e);
-                                    mark_channel_lost(&rt, &shared);
-                                    marked_lost = true;
-                                    break;
-                                }
+                            } else {
+                                slots[idx].next = next_probe[slots[idx].device];
+                            }
+                            continue;
+                        }
+
+                        match exec_group(&*link, dev, group, timeout, retries, gap).await {
+                            Ok(samples) => {
+                                write_samples(&rt.hub, samples);
+                                slots[idx].next = Instant::now() + group.interval;
+                            }
+                            Err(PollFailure::LinkDead(e)) => {
+                                failure = Some(PollFailure::LinkDead(e));
+                                break;
+                            }
+                            Err(PollFailure::DeviceFatal(e)) => {
+                                tracing::warn!(device = %dev.device_id, error = %e, "设备不可恢复，标记离线");
+                                mark_device_offline(&rt, &shared, slots[idx].device);
+                                offline[slots[idx].device] = true;
+                                next_probe[slots[idx].device] = Instant::now() + probe_interval;
+                                slots[idx].next = next_probe[slots[idx].device];
+                            }
+                            Err(PollFailure::DeviceDown(e)) => {
+                                tracing::warn!(device = %dev.device_id, error = %e, "设备重试耗尽，标记离线");
+                                mark_device_offline(&rt, &shared, slots[idx].device);
+                                offline[slots[idx].device] = true;
+                                next_probe[slots[idx].device] = Instant::now() + probe_interval;
+                                slots[idx].next = next_probe[slots[idx].device];
                             }
                         }
-                        now = tokio::time::Instant::now();
+                    }
+                    if let Some(f) = failure {
+                        break f;
                     }
                 }
             }
+        };
 
-            // BusDead 冒泡：跳出轮询循环进入重连
-            if shared.state() == "recovering" && marked_lost {
-                break;
-            }
+        shared.set_state("recovering");
+        mark_channel_lost(&rt, &shared);
+        tracing::warn!(channel = %channel_id, error = %inner, "通道中止，准备重连");
+        drop(link);
+        if sleep_with_cmds(&mut rx, backoff, &shared).await {
+            return;
         }
     }
-
-    tracing::info!(channel = %channel_id, "通道退出");
 }
 
-/// 执行一个轮询组事务：读块 + 重试。
-async fn exec_group(
-    bus: &dyn BusTransport,
-    driver: &dyn Driver,
-    slave: u8,
-    group: &PollGroupPlan,
-    timeout: Duration,
-    retries: u32,
-    gap: Duration,
-) -> Result<Vec<(hmi_domain::value::TagId, hmi_domain::value::TagSnapshot)>, PollFailure> {
-    let mut last_err: Option<String> = None;
-    for attempt in 0..=retries {
-        match driver.read_blocks(bus, slave, &group.blocks, timeout).await {
-            Ok(data) => {
-                let batch = group.decode("", &data);
-                if attempt > 0 {
-                    tracing::debug!(slave, attempt, "事务重试后成功");
-                }
-                tokio::time::sleep(gap).await;
-                return Ok(batch);
-            }
-            Err(DriverError::Bus(BusError::Io(e))) => {
-                return Err(PollFailure::BusDead(e));
-            }
-            Err(e) => {
-                last_err = Some(e.to_string());
-                if attempt < retries {
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                }
-            }
-        }
-    }
-    Err(PollFailure::SlaveDown(
-        last_err.unwrap_or_else(|| "未知".into()),
-    ))
-}
-
-enum Flow {
-    Continue,
+enum OpenOutcome {
+    Opened(Box<dyn Link>),
+    Failed(String),
     Stop,
 }
 
-/// 重连等待期间响应命令（无总线 → 写/探测返回失败）。
-async fn sleep_with_cmds(cmd_rx: &mut mpsc::Receiver<SupervisorCmd>, dur: Duration) -> Flow {
-    tokio::select! {
-        _ = tokio::time::sleep(dur) => Flow::Continue,
-        cmd = cmd_rx.recv() => {
-            match cmd {
-                None | Some(SupervisorCmd::Stop) => Flow::Stop,
-                Some(SupervisorCmd::WriteRegs { resp, .. }) => {
-                    let _ = resp.send(Err("总线未连接".into()));
-                    Flow::Continue
-                }
-                Some(SupervisorCmd::WriteCoil { resp, .. }) => {
-                    let _ = resp.send(Err("总线未连接".into()));
-                    Flow::Continue
-                }
-                Some(SupervisorCmd::Probe { resp, .. }) => {
-                    let _ = resp.send(false);
-                    Flow::Continue
+async fn open_with_cmds(
+    factory: &Arc<dyn TransportFactory>,
+    config: &ChannelConfig,
+    rx: &mut mpsc::Receiver<SupervisorCmd>,
+) -> OpenOutcome {
+    let fut = factory.open(config);
+    tokio::pin!(fut);
+    loop {
+        tokio::select! {
+            r = &mut fut => {
+                return match r {
+                    Ok(link) => OpenOutcome::Opened(link),
+                    Err(e) => OpenOutcome::Failed(e.to_string()),
+                };
+            }
+            cmd = rx.recv() => {
+                match cmd {
+                    None | Some(SupervisorCmd::Stop) => return OpenOutcome::Stop,
+                    Some(SupervisorCmd::Write { resp, .. }) => {
+                        let _ = resp.send(Err("通道正在重连".into()));
+                    }
+                    Some(SupervisorCmd::Probe { resp, .. }) => {
+                        let _ = resp.send(false);
+                    }
                 }
             }
         }
     }
 }
 
-fn mark_channel_lost(rt: &ChannelRuntime, shared: &Arc<ChannelShared>) {
-    let mut batch = Vec::new();
-    for d in &rt.devices {
-        batch.extend(rt.hub.comm_lost_batch(&d.all_tags));
-        shared.set_device_online(&d.device_id, false);
+async fn exec_group(
+    link: &dyn Link,
+    dev: &DeviceRuntime,
+    group: &PollGroup,
+    timeout: Duration,
+    retries: u32,
+    gap: Duration,
+) -> Result<Vec<Sample>, PollFailure> {
+    let mut last = String::new();
+    for attempt in 0..=retries {
+        match dev.driver.poll(link, &dev.address, group, timeout).await {
+            Ok(samples) => {
+                sleep_gap(gap).await;
+                return Ok(samples);
+            }
+            Err(e) => match e.poll_class() {
+                PollClass::LinkDead => return Err(PollFailure::LinkDead(e.to_string())),
+                PollClass::Fatal => return Err(PollFailure::DeviceFatal(e.to_string())),
+                PollClass::Retry => {
+                    last = e.to_string();
+                    tracing::debug!(device = %dev.device_id, attempt, error = %e, "事务失败");
+                    if attempt < retries {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                }
+            },
+        }
     }
-    rt.hub.write(batch);
+    Err(PollFailure::DeviceDown(last))
 }
 
-fn emit_state(rt: &ChannelRuntime, channel: &str, state: &str, detail: &str) {
-    let _ = rt.events.send(GatewayEvent::ChannelState {
-        channel: channel.to_string(),
-        state: state.to_string(),
-        detail: detail.to_string(),
-    });
+fn write_samples(hub: &TagHub, samples: Vec<Sample>) {
+    let ts = now_ms();
+    let batch: Vec<(TagId, TagSnapshot)> = samples
+        .into_iter()
+        .map(|s| {
+            (
+                s.tag,
+                TagSnapshot {
+                    value: s.value,
+                    quality: s.quality,
+                    ts_ms: ts,
+                },
+            )
+        })
+        .collect();
+    hub.write(batch);
 }
 
-fn emit_online(rt: &ChannelRuntime, device: &str, online: bool) {
+fn mark_device_offline(rt: &ChannelRuntime, shared: &Arc<ChannelShared>, dev_idx: usize) {
+    let dev = &rt.devices[dev_idx];
+    shared.set_device_online(&dev.device_id, false);
     let _ = rt.events.send(GatewayEvent::DeviceOnline {
-        device: device.to_string(),
-        online,
+        device: dev.device_id.clone(),
+        online: false,
     });
+    hub_lost(&rt.hub, &dev.all_tags, now_ms());
 }
 
-/// 共享总线适配器：把 `Arc<dyn BusTransport>` 再包一层供多个消费者使用
-/// （测试与 SIM 演示：工厂每次返回同一总线的克隆视图）。
-pub struct SharedBus(pub Arc<dyn BusTransport>);
+fn mark_channel_lost(rt: &ChannelRuntime, shared: &Arc<ChannelShared>) {
+    let ts = now_ms();
+    for dev in &rt.devices {
+        shared.set_device_online(&dev.device_id, false);
+        let _ = rt.events.send(GatewayEvent::DeviceOnline {
+            device: dev.device_id.clone(),
+            online: false,
+        });
+        hub_lost(&rt.hub, &dev.all_tags, ts);
+    }
+}
 
-#[async_trait::async_trait]
-impl BusTransport for SharedBus {
-    async fn transact(&self, request: &[u8], timeout: Duration) -> Result<Vec<u8>, BusError> {
-        self.0.transact(request, timeout).await
+fn hub_lost(hub: &TagHub, tags: &[TagId], ts: u64) {
+    let batch: Vec<(TagId, TagSnapshot)> = tags
+        .iter()
+        .map(|tag| {
+            let last = hub.get(tag);
+            let value = last.map(|s| s.value).unwrap_or(Value::F64(0.0));
+            (
+                tag.clone(),
+                TagSnapshot {
+                    value,
+                    quality: Quality::CommLost,
+                    ts_ms: ts,
+                },
+            )
+        })
+        .collect();
+    hub.write(batch);
+}
+
+async fn sleep_gap(gap: Duration) {
+    if !gap.is_zero() {
+        tokio::time::sleep(gap).await;
+    }
+}
+
+/// 重连等待期间仍消费命令（写/探测直接失败），Stop 立刻退出。
+/// 返回 true 表示收到 Stop。
+async fn sleep_with_cmds(
+    rx: &mut mpsc::Receiver<SupervisorCmd>,
+    duration: Duration,
+    shared: &Arc<ChannelShared>,
+) -> bool {
+    let deadline = Instant::now() + duration;
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(deadline - now) => return false,
+            cmd = rx.recv() => {
+                match cmd {
+                    None | Some(SupervisorCmd::Stop) => {
+                        shared.set_state("stopped");
+                        return true;
+                    }
+                    Some(SupervisorCmd::Write { resp, .. }) => {
+                        let _ = resp.send(Err("总线未连接".into()));
+                    }
+                    Some(SupervisorCmd::Probe { resp, .. }) => {
+                        let _ = resp.send(false);
+                    }
+                }
+            }
+        }
     }
 }

@@ -6,10 +6,12 @@
 
 use crate::manifest::PackageManifest;
 use crate::validate::validate_package;
+use hmi_domain::driver::Driver;
 use hmi_domain::points::PointsTable;
 use semver::Version;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -43,7 +45,10 @@ pub struct LoadedPackage {
 }
 
 /// 从目录读取并完整校验一个设备包（manifest.json + points.json）。
-pub fn load_package_dir(dir: &Path) -> Result<LoadedPackage, PackageError> {
+pub fn load_package_dir(
+    dir: &Path,
+    drivers: &[Arc<dyn Driver>],
+) -> Result<LoadedPackage, PackageError> {
     let manifest_path = dir.join("manifest.json");
     if !manifest_path.is_file() {
         return Err(PackageError::MissingFile("manifest.json".into()));
@@ -58,7 +63,7 @@ pub fn load_package_dir(dir: &Path) -> Result<LoadedPackage, PackageError> {
     manifest.ui.normalize(&manifest.id);
     let points: PointsTable = parse_json_file(&points_path)?;
 
-    let mut issues = validate_package(&manifest, &points);
+    let mut issues = validate_package(&manifest, &points, drivers);
     // 组件入口文件存在性（校验函数拿不到目录，这里补）
     for w in &manifest.ui.widgets {
         if !dir.join(&w.entry).is_file() {
@@ -94,6 +99,7 @@ pub fn install(
     src: &Path,
     dest_root: &Path,
     host_version: &Version,
+    drivers: &[Arc<dyn Driver>],
 ) -> Result<InstalledPackage, PackageError> {
     // 1. 物化源到临时目录（时间戳+进程id+序号保证唯一）
     let work_dir = unique_temp_dir("hmi-pkg-install");
@@ -104,7 +110,7 @@ pub fn install(
         let pkg_dir = locate_pkg_dir(&work_dir)?;
 
         // 2. 解析 + 校验
-        let loaded = load_package_dir(&pkg_dir)?;
+        let loaded = load_package_dir(&pkg_dir, drivers)?;
 
         // 3. 宿主版本检查
         if let Some(need) = &loaded.manifest.min_host_version {
@@ -257,7 +263,7 @@ pub struct PackageRegistry {
 
 impl PackageRegistry {
     /// 扫描目录重建注册表。根目录不存在视为空（不报错）。
-    pub fn scan(root: &Path) -> Self {
+    pub fn scan(root: &Path, drivers: &[Arc<dyn Driver>]) -> Self {
         let mut reg = Self::default();
         let Ok(ids) = fs::read_dir(root) else {
             return reg;
@@ -276,7 +282,7 @@ impl PackageRegistry {
                 if !p.is_dir() {
                     continue;
                 }
-                match load_package_dir(&p) {
+                match load_package_dir(&p, drivers) {
                     Ok(loaded) => candidates.push(InstalledPackage {
                         manifest: loaded.manifest,
                         points: loaded.points,
@@ -314,16 +320,20 @@ mod tests {
     use super::*;
     use std::fs;
 
+    fn test_drivers() -> Vec<Arc<dyn Driver>> {
+        vec![Arc::new(hmi_driver_modbus::ModbusDriver::new())]
+    }
+
     fn write_pkg(dir: &Path, id: &str, version: &str) {
         fs::create_dir_all(dir).unwrap();
         fs::write(
             dir.join("manifest.json"),
             serde_json::json!({
-                "schemaVersion": 1,
+                "schemaVersion": 2,
                 "id": id,
                 "name": "测试包",
                 "version": version,
-                "protocol": { "driver": "modbus-rtu" }
+                "protocol": { "driver": "modbus" }
             })
             .to_string(),
         )
@@ -333,7 +343,7 @@ mod tests {
             serde_json::json!({
                 "pollGroups": [{ "name": "fast", "intervalMs": 1000 }],
                 "points": [
-                    { "id": "voltage", "name": "电压", "register": "40101",
+                    { "id": "voltage", "name": "电压", "address": "40101",
                       "type": "u16", "scale": 0.1, "unit": "V", "pollGroup": "fast" }
                 ]
             })
@@ -350,11 +360,11 @@ mod tests {
         write_pkg(&src, "com.test.meter", "1.0.0");
 
         let host = Version::new(0, 1, 0);
-        let installed = install(&src, &root, &host).unwrap();
+        let installed = install(&src, &root, &host, &test_drivers()).unwrap();
         assert!(installed.dir.join("manifest.json").is_file());
         assert_eq!(installed.manifest.id, "com.test.meter");
 
-        let reg = PackageRegistry::scan(&root);
+        let reg = PackageRegistry::scan(&root, &test_drivers());
         assert_eq!(reg.list().len(), 1);
         let p = reg.get("com.test.meter").unwrap();
         assert_eq!(p.points.points.len(), 1);
@@ -370,10 +380,10 @@ mod tests {
         write_pkg(&src_v2, "com.test.meter", "1.1.0");
 
         let host = Version::new(0, 1, 0);
-        install(&src_v1, &root, &host).unwrap();
-        install(&src_v2, &root, &host).unwrap();
+        install(&src_v1, &root, &host, &test_drivers()).unwrap();
+        install(&src_v2, &root, &host, &test_drivers()).unwrap();
 
-        let reg = PackageRegistry::scan(&root);
+        let reg = PackageRegistry::scan(&root, &test_drivers());
         assert_eq!(reg.list().len(), 1); // 同 id 一个条目
         assert_eq!(
             reg.get("com.test.meter")
@@ -396,7 +406,12 @@ mod tests {
         v["minHostVersion"] = serde_json::json!("9.0.0");
         fs::write(src.join("manifest.json"), v.to_string()).unwrap();
 
-        let r = install(&src, &tmp.path().join("pkgs"), &Version::new(0, 1, 0));
+        let r = install(
+            &src,
+            &tmp.path().join("pkgs"),
+            &Version::new(0, 1, 0),
+            &test_drivers(),
+        );
         assert!(matches!(r, Err(PackageError::IncompatibleHost { .. })));
     }
 
@@ -408,7 +423,7 @@ mod tests {
         fs::create_dir_all(&bad).unwrap();
         fs::write(bad.join("manifest.json"), "{ not json").unwrap();
 
-        let reg = PackageRegistry::scan(&root);
+        let reg = PackageRegistry::scan(&root, &test_drivers());
         assert!(reg.is_empty());
         assert_eq!(reg.broken.len(), 1);
     }
@@ -420,12 +435,12 @@ mod tests {
         fs::create_dir_all(&src).unwrap();
         fs::write(
             src.join("manifest.json"),
-            r#"{ "schemaVersion":1, "id":"a.b", "name":"x", "version":"1.0.0",
-                 "protocol": { "driver": "modbus-rtu" } }"#,
+            r#"{ "schemaVersion":2, "id":"a.b", "name":"x", "version":"1.0.0",
+                 "protocol": { "driver": "modbus" } }"#,
         )
         .unwrap();
         assert!(matches!(
-            load_package_dir(&src),
+            load_package_dir(&src, &test_drivers()),
             Err(PackageError::MissingFile(_))
         ));
     }

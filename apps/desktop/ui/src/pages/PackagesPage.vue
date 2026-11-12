@@ -12,6 +12,7 @@ import { useConnectionStore } from '@/stores/connection'
 import { useProjectStore } from '@/stores/project'
 import { errorMessage, useToastStore } from '@/stores/toast'
 import type { PackageDto, PointDto } from '@/api/types'
+import { addressText } from '@/utils/transport'
 
 const router = useRouter()
 const project = useProjectStore()
@@ -264,7 +265,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="pkg-version">
             <span class="mono">v{{ selected.version }}</span>
-            <span class="state-pill idle">{{ selected.driver }}</span>
+            <span class="state-pill idle">{{ selected.protocol.driver }}</span>
             <n-button size="tiny" quaternary type="error" @click="removing = true">
               <template #icon><AppIcon name="trash" :size="14" /></template>
               删除
@@ -316,7 +317,7 @@ onBeforeUnmount(() => {
               <span class="point-name">{{ p.name }}</span>
               <span class="point-id">{{ p.id }}</span>
             </div>
-            <code class="cell mono">{{ p.register }}</code>
+            <code class="cell mono">{{ addressText(p.address) }}</code>
             <span class="cell"><span class="type-chip">{{ typeText(p) }}</span></span>
             <span class="cell">
               <span v-if="p.unit">{{ p.unit }}</span>

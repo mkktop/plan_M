@@ -7,6 +7,7 @@ import { useProjectStore } from '@/stores/project'
 import { useTagsStore } from '@/stores/tags'
 import { nowMs } from '@/utils/clock'
 import { formatAge } from '@/utils/format'
+import { addressLabel, channelSummary } from '@/utils/transport'
 import type { Quality } from '@/api/types'
 
 const props = defineProps<{ deviceId: string }>()
@@ -134,12 +135,12 @@ onBeforeUnmount(() => dispose?.())
           <dd class="mono">{{ device.id }}</dd>
         </div>
         <div class="kv">
-          <dt>从站地址</dt>
-          <dd class="mono">#{{ device.slave }}</dd>
+          <dt>设备地址</dt>
+          <dd class="mono">{{ addressLabel(device.address) }}</dd>
         </div>
         <div class="kv">
           <dt>通道</dt>
-          <dd class="mono">{{ channel?.name || device.channelId }} · {{ channel?.port || '—' }}</dd>
+          <dd class="mono">{{ channel?.name || device.channelId }} · {{ channel ? channelSummary(channel) : '—' }}</dd>
         </div>
         <div class="kv">
           <dt>设备包</dt>
@@ -147,7 +148,7 @@ onBeforeUnmount(() => dispose?.())
         </div>
         <div class="kv">
           <dt>驱动</dt>
-          <dd class="mono">{{ pkg?.driver || '—' }}</dd>
+          <dd class="mono">{{ pkg?.protocol.driver || '—' }}</dd>
         </div>
         <div class="kv">
           <dt>通道状态</dt>

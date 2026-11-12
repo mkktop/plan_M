@@ -7,6 +7,7 @@ import AppIcon from '@/components/AppIcon.vue'
 import DevicePickerModal from '@/components/device/DevicePickerModal.vue'
 import { useDeviceTabsStore } from '@/stores/deviceTabs'
 import { useProjectStore } from '@/stores/project'
+import { addressLabel } from '@/utils/transport'
 
 const route = useRoute()
 const router = useRouter()
@@ -57,13 +58,13 @@ function addDevice(): void {
       :class="{ active: activeDeviceId === d.id }"
       role="button"
       tabindex="0"
-      :title="`${d.name || d.id} · 从站 #${d.slave}`"
+      :title="`${d.name || d.id} · ${addressLabel(d.address)}`"
       @click="openDevice(d.id)"
       @keydown.enter="openDevice(d.id)"
     >
       <span class="online-dot" :class="{ on: d.online }" />
       <span class="type-tab-name">{{ d.name || d.id }}</span>
-      <span class="type-tab-sub mono">#{{ d.slave }}</span>
+      <span class="type-tab-sub mono">{{ addressLabel(d.address) }}</span>
       <button
         type="button"
         class="type-tab-close"

@@ -1,6 +1,6 @@
 //! 设备包 manifest（manifest.json）模型。
 
-use hmi_domain::points::ProtocolDefaults;
+pub use hmi_domain::protocol::ProtocolDecl;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PackageManifest {
-    /// 打点表结构版本（当前 1）
+    /// 包结构版本（当前 2）
     pub schema_version: u32,
     /// 包 id，如 "com.acme.pm3000"（小写、点分）
     pub id: String,
@@ -254,17 +254,6 @@ pub struct BindingDecl {
     pub tag: Option<String>,
 }
 
-/// 协议声明。
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProtocolDecl {
-    /// 驱动 id，如 "modbus-rtu"（存在性由宿主在安装/加载时校验）
-    pub driver: String,
-    /// 点表字段包级默认值
-    #[serde(default)]
-    pub defaults: ProtocolDefaults,
-}
-
 impl PackageUiDecl {
     /// 读取时归一化（不写回用户包）：
     ///
@@ -309,32 +298,34 @@ mod tests {
     fn parse_manifest() {
         let j = r#"
         {
-          "schemaVersion": 1,
+          "schemaVersion": 2,
           "id": "com.acme.pm3000",
           "name": "ACME PM3000 三相电表",
           "vendor": "ACME",
           "version": "1.2.0",
           "minHostVersion": "0.1.0",
           "protocol": {
-            "driver": "modbus-rtu",
-            "defaults": { "byteOrder": "cdab", "respTimeoutMs": 150 }
+            "driver": "modbus",
+            "transports": ["serial", "tcp"],
+            "params": { "framing": "auto", "byteOrder": "cdab" }
           }
         }"#;
         let m: PackageManifest = serde_json::from_str(j).unwrap();
         assert_eq!(m.id, "com.acme.pm3000");
         assert_eq!(m.version.to_string(), "1.2.0");
-        assert_eq!(m.protocol.driver, "modbus-rtu");
-        assert!(m.protocol.defaults.byte_order.is_some());
-        assert_eq!(m.protocol.defaults.resp_timeout_ms, Some(150));
+        assert_eq!(m.protocol.driver, "modbus");
+        assert_eq!(m.protocol.transports.len(), 2);
+        assert_eq!(m.protocol.params["byteOrder"], "cdab");
     }
 
     #[test]
     fn defaults_optional() {
-        let j = r#"{ "schemaVersion":1, "id":"a.b", "name":"x", "version":"0.1.0",
-                    "protocol": { "driver": "modbus-rtu" } }"#;
+        let j = r#"{ "schemaVersion":2, "id":"a.b", "name":"x", "version":"0.1.0",
+                    "protocol": { "driver": "modbus" } }"#;
         let m: PackageManifest = serde_json::from_str(j).unwrap();
         assert_eq!(m.min_host_version, None);
-        assert_eq!(m.protocol.defaults, ProtocolDefaults::default());
+        assert!(m.protocol.transports.is_empty());
+        assert_eq!(m.protocol.params, serde_json::json!({}));
         assert!(m.ui.pages.is_empty());
     }
 
@@ -342,8 +333,8 @@ mod tests {
     fn parses_ui_pages() {
         let j = r#"
         {
-          "schemaVersion": 1, "id": "com.acme.radar", "name": "雷达物位计",
-          "version": "1.0.0", "protocol": { "driver": "modbus-rtu" },
+          "schemaVersion": 2, "id": "com.acme.radar", "name": "雷达物位计",
+          "version": "1.0.0", "protocol": { "driver": "modbus" },
           "ui": {
             "pages": [
               { "id": "overview", "title": "设备概览", "icon": "pulse",
@@ -364,8 +355,8 @@ mod tests {
     fn parses_v2_pages_and_widgets() {
         let j = r#"
         {
-          "schemaVersion": 1, "id": "com.acme.pm3000", "name": "PM3000",
-          "version": "1.0.0", "protocol": { "driver": "modbus-rtu" },
+          "schemaVersion": 2, "id": "com.acme.pm3000", "name": "PM3000",
+          "version": "1.0.0", "protocol": { "driver": "modbus" },
           "ui": {
             "widgets": [
               { "id": "trend", "title": "趋势图", "entry": "widgets/trend.js",

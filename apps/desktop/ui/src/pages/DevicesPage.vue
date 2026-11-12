@@ -12,7 +12,8 @@ import SerialPortsCard from '@/components/channel/SerialPortsCard.vue'
 import { useConnectionStore } from '@/stores/connection'
 import { useProjectStore } from '@/stores/project'
 import { errorMessage, useToastStore } from '@/stores/toast'
-import type { ChannelDto, DeviceDto } from '@/api/types'
+import { addressLabel, channelSummary, packageSupportsTransport } from '@/utils/transport'
+import type { ChannelDto, DeviceAddress, DeviceDto, PackageDto } from '@/api/types'
 
 // 设备页 = 总线（串口通道）+ 从站设备。通道是设备的父级，所以合并在一页：
 // 每条总线一个分组，组头就是总线的状态/参数/扫描/编辑入口。
@@ -39,16 +40,32 @@ const deletingChannel = ref(false)
 const form = reactive({
   channelId: '',
   packageId: '',
-  slave: 1,
+  /** 文本输入：Modbus 为 1–247，其他协议可为 MAC/路径 */
+  address: '1',
   id: '',
   name: '',
 })
 
 const channelOptions = computed(() =>
-  project.channels.map((c) => ({ label: `${c.name || c.id}（${c.port}）`, value: c.id })),
+  project.channels.map((c) => ({
+    label: `${c.name || c.id}（${channelSummary(c)}）`,
+    value: c.id,
+  })),
 )
+
+const selectedChannel = computed(() => project.channels.find((c) => c.id === form.channelId))
+
+/** 只列与当前通道传输兼容的包（驱动能力 ∩ 包声明）。 */
+const compatiblePackages = computed<PackageDto[]>(() => {
+  const ch = selectedChannel.value
+  if (!ch) return project.packages
+  return project.packages.filter((p) =>
+    packageSupportsTransport(p, ch.transport, project.drivers),
+  )
+})
+
 const packageOptions = computed(() =>
-  project.packages.map((p) => ({ label: `${p.name} · v${p.version}`, value: p.id })),
+  compatiblePackages.value.map((p) => ({ label: `${p.name} · v${p.version}`, value: p.id })),
 )
 
 const STATE_META: Record<string, { label: string; tone: string }> = {
@@ -63,10 +80,6 @@ function stateOf(ch: ChannelDto): { label: string; tone: string } {
   return STATE_META[s] ?? { label: s, tone: 'idle' }
 }
 
-function parityLetter(p: string): string {
-  return p === 'none' ? 'N' : p === 'odd' ? 'O' : 'E'
-}
-
 function onlineOn(channelId: string): number {
   return project.devicesOn(channelId).filter((d) => d.online).length
 }
@@ -76,27 +89,46 @@ function pointCount(d: DeviceDto): number {
   return pkg ? pkg.points.reduce((n, p) => n + 1 + p.bits.length, 0) : 0
 }
 
+function parseAddress(raw: string): DeviceAddress {
+  const s = raw.trim()
+  return /^\d+$/.test(s) ? Number(s) : s
+}
+
+function addressSlug(raw: string): string {
+  return raw.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'dev'
+}
+
 function autoFill(): void {
   if (idTouched.value) return
   const pkg = project.packageById.get(form.packageId)
   const slug = pkg?.id.split('.').filter(Boolean).pop() || 'dev'
-  const base = `${slug}-${form.slave}`
+  const base = `${slug}-${addressSlug(form.address)}`
   let id = base
   let n = 2
   while (project.devices.some((d) => d.id === id)) id = `${base}-${n++}`
   form.id = id
-  form.name = pkg ? `${pkg.name} #${form.slave}` : `设备 #${form.slave}`
+  form.name = pkg ? `${pkg.name} ${addressLabel(parseAddress(form.address))}` : `设备 ${form.address}`
 }
 
-watch([() => form.packageId, () => form.slave], autoFill)
+watch([() => form.packageId, () => form.address], autoFill)
+watch(selectedChannel, () => {
+  if (form.packageId && !compatiblePackages.value.some((p) => p.id === form.packageId)) {
+    form.packageId = compatiblePackages.value[0]?.id || ''
+  }
+})
 
-function openAdd(channelId?: string, slave?: number, packageId?: string): void {
+function openAdd(
+  channelId?: string,
+  address?: DeviceAddress,
+  packageId?: string,
+): void {
   form.channelId = channelId || project.channels[0]?.id || ''
+  const allow = compatiblePackages.value
   form.packageId =
-    (packageId && project.packageById.has(packageId) ? packageId : '') ||
-    project.packages[0]?.id ||
+    (packageId && allow.some((p) => p.id === packageId) ? packageId : '') ||
+    allow[0]?.id ||
     ''
-  form.slave = slave && slave > 0 ? slave : 1
+  form.address = address !== undefined ? String(address) : '1'
   idTouched.value = false
   autoFill()
   showForm.value = true
@@ -108,7 +140,12 @@ function validate(): string | null {
   if (!/^[A-Za-z0-9_-]+$/.test(form.id.trim())) return '设备 ID 只允许字母、数字、下划线、连字符'
   if (form.id.includes('.')) return '设备 ID 不能包含点号'
   if (project.devices.some((d) => d.id === form.id.trim())) return `设备 ID ${form.id.trim()} 已存在`
-  if (form.slave < 1 || form.slave > 247) return '从站地址需在 1–247'
+  if (!form.address.trim()) return '设备地址必填'
+  const pkg = project.packageById.get(form.packageId)
+  if (pkg?.protocol.driver === 'modbus') {
+    const n = Number(form.address.trim())
+    if (!Number.isInteger(n) || n < 1 || n > 247) return 'Modbus 从站地址需为 1–247 的整数'
+  }
   return null
 }
 
@@ -125,7 +162,7 @@ async function save(): Promise<void> {
       name: form.name.trim() || form.id.trim(),
       channelId: form.channelId,
       package: form.packageId,
-      slave: form.slave,
+      address: parseAddress(form.address),
     })
     toast.success(`设备 ${form.id.trim()} 已添加`)
     showForm.value = false
@@ -159,7 +196,7 @@ function gotoTags(d: DeviceDto): void {
 
 async function openChannelCreate(port?: string): Promise<void> {
   // 表单默认端口来自串口枚举；还没枚举过就先拉一次，失败也不阻断（可手填/SIM）
-  if (conn.connected && !project.serialPorts.length) {
+  if (conn.connected && !(project.targets.serial ?? []).length) {
     try {
       await project.loadSerialPorts()
     } catch {
@@ -197,20 +234,20 @@ async function doDeleteChannel(): Promise<void> {
   }
 }
 
-function addDeviceFromScan(slave: number): void {
+function addDeviceFromScan(address: DeviceAddress): void {
   const ch = scanChannel.value
   scanChannel.value = null
-  openAdd(ch?.id, slave)
+  openAdd(ch?.id, address)
 }
 
 // 从设备包页 / 设备工作区跳转过来时自动打开添加对话框（快照可能已加载，也可能还在路上）。
-const prefill = ref<{ channel?: string; slave?: number; packageId?: string } | null>(null)
+const prefill = ref<{ channel?: string; address?: string; packageId?: string } | null>(null)
 
 function applyPrefill(): void {
   if (!project.loaded || !prefill.value) return
   const p = prefill.value
   prefill.value = null
-  openAdd(p.channel, p.slave, p.packageId)
+  openAdd(p.channel, p.address, p.packageId)
 }
 
 watch(() => project.loaded, applyPrefill, { immediate: true })
@@ -221,7 +258,7 @@ onMounted(() => {
   if (q.add === '1') {
     prefill.value = {
       channel: typeof q.channel === 'string' ? q.channel : undefined,
-      slave: Number(q.slave) || 1,
+      address: typeof q.address === 'string' ? q.address : undefined,
       packageId: typeof q.package === 'string' ? q.package : undefined,
     }
     void router.replace({ query: {} })
@@ -233,7 +270,7 @@ onMounted(() => {
   <div class="page">
     <PageHeader
       title="设备"
-      subtitle="一条串口总线挂多台从站；设备 = 设备包 + 总线 + 从站地址"
+      subtitle="通道 = 串口 / TCP / 虚拟总线；设备 = 设备包 + 通道 + 协议地址"
     >
       <n-button size="small" @click="openChannelCreate()">
         <template #icon><AppIcon name="plug" :size="15" /></template>
@@ -270,11 +307,9 @@ onMounted(() => {
         <header class="group-head">
           <span class="state-dot" :class="stateOf(ch).tone" :title="stateOf(ch).label" />
           <h3>{{ ch.name || ch.id }}</h3>
-          <code>{{ ch.id }} · {{ ch.port }}</code>
+          <code>{{ ch.id }} · {{ channelSummary(ch) }}</code>
           <span class="state-pill" :class="stateOf(ch).tone">{{ stateOf(ch).label }}</span>
-          <span class="group-frame mono">
-            {{ ch.baudRate }} bps · {{ ch.dataBits }}{{ parityLetter(ch.parity) }}{{ ch.stopBits }}
-          </span>
+          <span v-if="ch.configError" class="state-pill bad" :title="ch.configError">配置错误</span>
           <div class="spacer" />
           <span class="muted small">
             {{ project.devicesOn(ch.id).length }} 台 · 在线 {{ onlineOn(ch.id) }}
@@ -298,7 +333,7 @@ onMounted(() => {
                 <strong>{{ d.name || d.id }}</strong>
                 <code>{{ d.id }}</code>
               </div>
-              <span class="slave-badge mono">#{{ d.slave }}</span>
+              <span class="slave-badge mono">{{ addressLabel(d.address) }}</span>
             </div>
 
             <div class="device-meta">
@@ -315,6 +350,11 @@ onMounted(() => {
                 <span class="label">状态</span>
                 <span :class="d.online ? 'text-good' : 'text-muted'">{{ d.online ? '在线' : '离线' }}</span>
               </div>
+            </div>
+
+            <div v-if="d.configError" class="banner warn mt-8 small">
+              <AppIcon name="alert" :size="14" />
+              <span>{{ d.configError }}</span>
             </div>
 
             <div class="device-foot">
@@ -342,8 +382,8 @@ onMounted(() => {
     <EmptyState
       v-else-if="project.loaded"
       icon="plug"
-      title="还没有总线（串口通道）"
-      text="接入 USB-485 后为它建一条总线；没有硬件时可用 SIM 虚拟总线演示。"
+      title="还没有通道"
+      text="接入 USB-485 / TCP 网关后建一条通道；没有硬件时可用虚拟总线演示。"
     >
       <n-button size="small" type="primary" @click="openChannelCreate()">新建通道</n-button>
     </EmptyState>
@@ -386,8 +426,9 @@ onMounted(() => {
           <n-select v-model:value="form.packageId" :options="packageOptions" placeholder="选择设备型号" />
         </div>
         <div class="field">
-          <label>从站地址</label>
-          <n-input-number v-model:value="form.slave" :min="1" :max="247" placeholder="从站地址" style="width: 100%" />
+          <label>设备地址</label>
+          <n-input v-model:value="form.address" placeholder="1 / AA:BB:CC:DD:EE:FF" />
+          <p class="hint">Modbus 为 1–247；其他协议可填文本地址。</p>
         </div>
         <div class="field">
           <label>设备 ID</label>
@@ -424,7 +465,7 @@ onMounted(() => {
       @close="pendingChannelDelete = null"
     >
       <p>
-        确认删除通道 <b class="mono">{{ pendingChannelDelete.id }}</b>（{{ pendingChannelDelete.port }}）？
+        确认删除通道 <b class="mono">{{ pendingChannelDelete.id }}</b>（{{ channelSummary(pendingChannelDelete) }}）？
       </p>
       <p class="text-warn mt-8">
         挂在该通道下的 {{ project.devicesOn(pendingChannelDelete.id).length }} 台设备会一并删除，且不可撤销。

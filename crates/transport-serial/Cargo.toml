@@ -1,0 +1,15 @@
+[package]
+name = "hmi-transport-serial"
+description = "串口传输：字节收发、COM 号漂移回退、串口枚举"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+hmi-domain = { workspace = true }
+tokio = { workspace = true }
+tokio-serial = { workspace = true }
+serialport = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }

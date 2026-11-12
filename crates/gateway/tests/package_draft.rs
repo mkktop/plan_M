@@ -1,24 +1,24 @@
 //! 包编辑器草稿链路：校验 → 安装 → 导出（P4）。
 
-use hmi_gateway::supervisor::BusOpener;
+use hmi_domain::driver::Driver;
 use hmi_gateway::GatewayService;
 use semver::Version;
 use serde_json::json;
 use std::sync::Arc;
 
 fn service(dir: &std::path::Path) -> Arc<GatewayService> {
-    let opener: BusOpener = Arc::new(|_| Err("测试不打开总线".into()));
-    GatewayService::new(dir, Version::new(0, 1, 1), Vec::new(), opener).unwrap()
+    let drivers: Vec<Arc<dyn Driver>> = vec![Arc::new(hmi_driver_modbus::ModbusDriver::new())];
+    GatewayService::new(dir, Version::new(0, 1, 1), drivers, Vec::new()).unwrap()
 }
 
 fn manifest() -> serde_json::Value {
     json!({
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "id": "com.test.studio",
         "name": "编辑器示例",
         "vendor": "测试",
         "version": "0.1.0",
-        "protocol": { "driver": "modbus-rtu" },
+        "protocol": { "driver": "modbus" },
         "ui": {
             "pages": [{
                 "schemaVersion": 2,
@@ -47,9 +47,9 @@ fn points() -> serde_json::Value {
     json!({
         "pollGroups": [{ "name": "fast", "intervalMs": 1000 }],
         "points": [
-            { "id": "uab", "name": "AB线电压", "register": "40101", "type": "u16",
+            { "id": "uab", "name": "AB线电压", "address": "40101", "type": "u16",
               "scale": 0.1, "unit": "V", "pollGroup": "fast" },
-            { "id": "ia", "name": "A相电流", "register": "40102", "type": "u16",
+            { "id": "ia", "name": "A相电流", "address": "40102", "type": "u16",
               "scale": 0.01, "unit": "A", "pollGroup": "fast" }
         ]
     })
@@ -121,7 +121,7 @@ async fn draft_export_refuses_invalid_points() {
     let tmp = tempfile::tempdir().unwrap();
     let svc = service(tmp.path());
     let mut bad_points = points();
-    bad_points["points"][0]["register"] = json!("");
+    bad_points["points"][0]["address"] = json!("");
     let out = tmp.path().join("export");
     assert!(svc
         .export_package_draft(&manifest(), &bad_points, out.to_str().unwrap())

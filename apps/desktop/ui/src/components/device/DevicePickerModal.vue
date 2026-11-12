@@ -7,6 +7,7 @@ import { NButton, NInput } from 'naive-ui'
 import AppIcon from '@/components/AppIcon.vue'
 import ModalShell from '@/components/ModalShell.vue'
 import { useProjectStore } from '@/stores/project'
+import { addressLabel, channelSummary } from '@/utils/transport'
 
 const emit = defineEmits<{ (e: 'close'): void; (e: 'pick', deviceId: string): void }>()
 
@@ -25,7 +26,7 @@ const groups = computed(() => {
       channel,
       devices: project.devicesOn(channel.id).filter((d) => {
         if (!kw) return true
-        const hay = `${d.name} ${d.id} #${d.slave} ${pkgName(d.package)}`.toLowerCase()
+        const hay = `${d.name} ${d.id} ${addressLabel(d.address)} ${pkgName(d.package)}`.toLowerCase()
         return hay.includes(kw)
       }),
     }))
@@ -52,14 +53,14 @@ function addDevice(): void {
     @close="emit('close')"
   >
     <div class="picker">
-      <n-input v-model:value="keyword" placeholder="搜索名称 / id / 从站号 / 型号" clearable />
+      <n-input v-model:value="keyword" placeholder="搜索名称 / id / 设备地址 / 型号" clearable />
 
       <div class="picker-list">
         <section v-for="g in groups" :key="g.channel.id" class="picker-group">
           <header class="picker-group-head">
             <AppIcon name="plug" :size="13" />
             <strong>{{ g.channel.name || g.channel.id }}</strong>
-            <code class="mono muted small">{{ g.channel.port }}</code>
+            <code class="mono muted small">{{ channelSummary(g.channel) }}</code>
             <span class="spacer" />
             <span class="muted small">{{ g.devices.length }} 台</span>
           </header>
@@ -74,7 +75,7 @@ function addDevice(): void {
             <span class="online-dot" :class="{ on: d.online }" />
             <span class="picker-item-main">
               <strong>{{ d.name || d.id }}</strong>
-              <small class="mono muted">{{ d.id }} · 从站 #{{ d.slave }}</small>
+              <small class="mono muted">{{ d.id }} · {{ addressLabel(d.address) }}</small>
             </span>
             <span class="picker-item-pkg" :title="pkgName(d.package)">
               {{ pkgName(d.package) }}

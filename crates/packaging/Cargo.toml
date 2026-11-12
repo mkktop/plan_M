@@ -15,4 +15,5 @@ zip = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+hmi-driver-modbus = { workspace = true }
 tempfile = "3"

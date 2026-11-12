@@ -7,7 +7,7 @@
     {
       "id": "uab",
       "name": "AB线电压",
-      "register": "40101",
+      "address": "40101",
       "type": "u16",
       "scale": 0.1,
       "unit": "V",
@@ -17,7 +17,7 @@
     {
       "id": "ubc",
       "name": "BC线电压",
-      "register": "40102",
+      "address": "40102",
       "type": "u16",
       "scale": 0.1,
       "unit": "V",
@@ -26,7 +26,7 @@
     {
       "id": "uca",
       "name": "CA线电压",
-      "register": "40103",
+      "address": "40103",
       "type": "u16",
       "scale": 0.1,
       "unit": "V",
@@ -35,7 +35,7 @@
     {
       "id": "ia",
       "name": "A相电流",
-      "register": "40104",
+      "address": "40104",
       "type": "u16",
       "scale": 0.01,
       "unit": "A",
@@ -44,7 +44,7 @@
     {
       "id": "ib",
       "name": "B相电流",
-      "register": "40105",
+      "address": "40105",
       "type": "u16",
       "scale": 0.01,
       "unit": "A",
@@ -53,7 +53,7 @@
     {
       "id": "ic",
       "name": "C相电流",
-      "register": "40106",
+      "address": "40106",
       "type": "u16",
       "scale": 0.01,
       "unit": "A",
@@ -62,7 +62,7 @@
     {
       "id": "p",
       "name": "有功功率",
-      "register": "40107",
+      "address": "40107",
       "type": "i32",
       "byteOrder": "cdab",
       "scale": 0.1,
@@ -72,7 +72,7 @@
     {
       "id": "q",
       "name": "无功功率",
-      "register": "40109",
+      "address": "40109",
       "type": "i32",
       "byteOrder": "cdab",
       "scale": 0.1,
@@ -82,7 +82,7 @@
     {
       "id": "freq",
       "name": "频率",
-      "register": "40115",
+      "address": "40115",
       "type": "u16",
       "scale": 0.01,
       "unit": "Hz",
@@ -91,7 +91,7 @@
     {
       "id": "energy",
       "name": "有功电度",
-      "register": "40200",
+      "address": "40200",
       "type": "u32",
       "byteOrder": "cdab",
       "scale": 0.01,
@@ -101,7 +101,7 @@
     {
       "id": "reactive_energy",
       "name": "无功电度",
-      "register": "40202",
+      "address": "40202",
       "type": "u32",
       "byteOrder": "cdab",
       "scale": 0.01,
@@ -111,7 +111,7 @@
     {
       "id": "status",
       "name": "状态字",
-      "register": "40300",
+      "address": "40300",
       "type": "u16",
       "pollGroup": "fast",
       "bits": {
@@ -123,7 +123,7 @@
     {
       "id": "setpoint",
       "name": "功率上限设定",
-      "register": "40310",
+      "address": "40310",
       "type": "u16",
       "scale": 1,
       "unit": "W",
@@ -136,7 +136,7 @@
     {
       "id": "mode",
       "name": "运行模式",
-      "register": "40311",
+      "address": "40311",
       "type": "u16",
       "access": "rw",
       "pollGroup": "fast",
@@ -152,7 +152,7 @@
     {
       "id": "relay",
       "name": "输出继电器",
-      "register": "40312",
+      "address": "40312",
       "type": "u16",
       "access": "rw",
       "pollGroup": "fast",

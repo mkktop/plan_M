@@ -18,34 +18,59 @@ export interface TagChange {
 
 export type ChannelState = 'running' | 'recovering' | 'faulted' | 'stopped'
 export type Parity = 'none' | 'odd' | 'even'
+export type TransportKind = 'serial' | 'tcp' | 'sim' | 'ble'
 
-export interface ChannelDto {
-  id: string
-  name: string
-  port: string
-  state: string
-  hwId: string | null
-  baudRate: number
-  dataBits: number
-  parity: Parity
-  stopBits: number
+export interface ChannelTiming {
   respTimeoutMs: number
   retries: number
-  interFrameGapMs: number
+  probeIntervalMs: number
 }
 
-export interface DeviceDto {
+export type ChannelConfig = {
+  id: string
+  name: string
+  timing: ChannelTiming
+} & (
+  | {
+      transport: 'serial'
+      port: string
+      hwId?: string | null
+      baudRate: number
+      dataBits: number
+      parity: Parity
+      stopBits: number
+      interFrameGapMs: number
+    }
+  | { transport: 'tcp'; host: string; port: number; connectTimeoutMs: number }
+  | { transport: 'sim'; seed?: string | null }
+  | { transport: 'ble'; adapter?: string | null; address: string }
+)
+
+export type ChannelDto = ChannelConfig & {
+  state: string
+  configError?: string | null
+}
+
+export type DeviceAddress = number | string
+
+export interface DeviceConfig {
   id: string
   name: string
   channelId: string
   package: string
-  slave: number
+  /** 驱动私有地址：Modbus = 从站号，BLE = MAC，其他协议可为字符串 */
+  address: DeviceAddress
+  overrides?: Record<string, unknown>
+}
+
+export interface DeviceDto extends DeviceConfig {
   online: boolean
-  /** 实例级点表覆盖，供设置页回填 */
-  overrides: Record<string, unknown>
+  /** 驱动缺失/编译失败等配置错误 */
+  configError?: string | null
 }
 
 export type DataType = 'u16' | 'i16' | 'u32' | 'i32' | 'u64' | 'f32' | 'f64' | 'bcd16' | 'bcd32'
+export type ByteOrder = 'abcd' | 'badc' | 'cdab' | 'dcba'
 export type RegArea = 'coil' | 'discrete' | 'input' | 'holding'
 export type Access = 'r' | 'rw'
 
@@ -64,13 +89,17 @@ export interface EnumValueDto {
 export interface PointDto {
   id: string
   name: string
-  register: string
-  area: RegArea
+  /** 寄存器字符串或驱动私有地址对象 */
+  address: string | Record<string, unknown>
+  /** 寄存器类协议的显示区（非寄存器协议为空） */
+  area?: RegArea | null
   type: DataType
+  byteOrder?: ByteOrder | null
   access: Access
   scale: number | null
   offset: number | null
   unit: string
+  pollGroup?: string | null
   bits: BitDto[]
   /** 写值下限（工程量） */
   min?: number | null
@@ -82,12 +111,24 @@ export interface PointDto {
   enum?: EnumValueDto[]
 }
 
+export interface ProtocolDecl {
+  driver: string
+  transports: TransportKind[]
+  params: Record<string, unknown>
+}
+
+export interface DriverInfoDto {
+  id: string
+  name: string
+  transports: TransportKind[]
+}
+
 export interface PackageDto {
   id: string
   name: string
   vendor: string
   version: string
-  driver: string
+  protocol: ProtocolDecl
   description: string
   /** 设备包声明的默认工作区页面（空 = 宿主 fallback 四页） */
   ui: PackageUiDto
@@ -172,10 +213,16 @@ export interface WorkspaceDto {
   pages: DevicePageDto[]
 }
 
-export interface SerialPortDto {
-  portName: string
-  hwId: string | null
+export interface TransportTarget {
+  id: string
+  label: string
   description: string
+  hwId?: string | null
+}
+
+export interface ScanRange {
+  from: number
+  to: number
 }
 
 export interface WidgetLayout {
@@ -250,39 +297,16 @@ export interface SnapshotData {
   tags: TagChange[]
 }
 
-export interface SerialChannelConfig {
-  id: string
-  name: string
-  port: string
-  hwId?: string | null
-  baudRate: number
-  dataBits: number
-  parity: Parity
-  stopBits: number
-  respTimeoutMs: number
-  retries: number
-  interFrameGapMs: number
-}
-
-export interface DeviceConfig {
-  id: string
-  name: string
-  channelId: string
-  package: string
-  slave: number
-  overrides?: Record<string, unknown>
-}
-
 export type ClientMsg =
   | { type: 'hello'; token: string }
   | { type: 'getSnapshot' }
   | { type: 'subscribe'; tags: string[] }
   | { type: 'unsubscribe'; tags: string[] }
   | { type: 'writeTag'; tag: string; value: TagValue }
-  | { type: 'scanChannel'; channel: string; range?: [number, number] | null }
-  | { type: 'getSerialPorts' }
+  | { type: 'scanChannel'; channel: string; driver?: string | null; range?: ScanRange | null }
+  | { type: 'getTransportTargets'; transport: TransportKind }
   | { type: 'getPackages' }
-  | { type: 'upsertChannel'; config: SerialChannelConfig }
+  | { type: 'upsertChannel'; config: ChannelConfig }
   | { type: 'removeChannel'; channel: string }
   | { type: 'addDevice'; config: DeviceConfig }
   | { type: 'removeDevice'; device: string }
@@ -307,14 +331,20 @@ export type ClientMsg =
     }
 
 export type ServerMsg =
-  | { type: 'welcome'; hostVersion: string }
+  | {
+      type: 'welcome'
+      hostVersion: string
+      apiVersion: number
+      transports: TransportKind[]
+      drivers: DriverInfoDto[]
+    }
   | ({ type: 'snapshot' } & SnapshotData)
   | { type: 'changes'; items: TagChange[] }
   | { type: 'channelState'; channel: string; state: string; detail: string }
   | { type: 'deviceState'; device: string; online: boolean }
-  | { type: 'scanProgress'; channel: string; slave: number; found: boolean }
-  | { type: 'scanDone'; channel: string; found: number[] }
-  | { type: 'serialPorts'; ports: SerialPortDto[] }
+  | { type: 'scanProgress'; channel: string; address: DeviceAddress; found: boolean }
+  | { type: 'scanDone'; channel: string; found: DeviceAddress[] }
+  | { type: 'transportTargets'; transport: TransportKind; targets: TransportTarget[] }
   | { type: 'packages'; packages: PackageDto[] }
   | { type: 'dashboards'; dashboards: DashboardDto[] }
   | { type: 'uiPlugins'; plugins: UiPluginDto[] }

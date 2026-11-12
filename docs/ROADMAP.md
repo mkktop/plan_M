@@ -12,12 +12,13 @@
 ## 1. 当前状态（第一～五轮 + 发版机制已完成）
 
 - Rust 1.99.1（MSVC）已装；Node 24 + pnpm 11 + WebView2 + Tauri CLI 2.12.4 就绪。
-- Workspace：`crates/domain`、`crates/driver-modbus-rtu`、`crates/packaging`、
-  `crates/gateway`、`crates/wire`、`apps/gatewayd`、`apps/desktop/src-tauri`。
-- 后端 **110 个测试全绿**；clippy 0 警告；fmt 通过；`vue-tsc` + `vite build` 通过。
-- 实机验收通过：`pkg validate` / `poll --com SIM` / `serve --sim` + `/health` +
-  独立 WebSocket 客户端全协议；桌面 UI（浏览器模式）走完 诊断→通道→设备→实时点表→写值→
-  扫描→添加/删除设备→断线重连全流程。
+- Workspace：`crates/domain`、`crates/transport-serial`、`crates/transport-tcp`、
+  `crates/transport-sim`、`crates/driver-modbus`、`crates/packaging`、`crates/gateway`、
+  `crates/wire`、`apps/gatewayd`、`apps/desktop/src-tauri`。
+- 后端测试全绿；`vue-tsc` + `vite build` 通过。
+- 验收通过：`pkg validate` / `poll --transport sim` / `sim-tcp` + `poll --transport tcp` /
+  `serve --sim` + `/health` + 独立 WebSocket 客户端全协议；桌面 UI（浏览器模式）走完
+  诊断→通道→设备→实时点表→写值→扫描→添加/删除设备→断线重连全流程。
 - 示例设备包 `examples/packages/pm3000`（13 点，覆盖 u16/u32/i32/cdab/位展开/可写/双轮询组）。
 - **第二轮 UI 已交付**：`apps/desktop/ui`（Vue 3 + Vite + Pinia + Naive UI 表单）与
   `apps/desktop/src-tauri`（Tauri 2 薄壳，`gateway_info` 读 token）。四个页面：
@@ -87,16 +88,18 @@ pnpm --dir ui dev                                 # 浏览器调试：?token=<ga
 
 ### 已确定且不要推翻的设计决策
 
-1. **双进程**：UI 可崩可关，采集常驻。`domain/gateway/packaging` 不允许依赖 tauri 或串口实现
-   （总线打开由 `BusOpener` 注入、驱动从 `Driver` 端口注入，见 `apps/gatewayd/src/lib.rs`）。
-2. **驱动跟随设备包**（`manifest.protocol.driver`），一条 485 总线允许混协议设备。
-3. **485 语义**：一条总线单任务串行事务；单事务超时→重试→从站离线→5s 周期探测恢复；
-   串口 I/O 错→整通道 `recovering` 退避重连；离线期间 tag 质量 `comm_lost`（保留最后好值）。
+1. **双进程**：UI 可崩可关，采集常驻。`domain/gateway/packaging` 不允许依赖 tauri 或任何
+   串口/驱动实现：传输由 `TransportFactory` 注入、驱动由 `Driver` 端口注入（见 `apps/gatewayd/src/lib.rs`）。
+2. **四层分工**：Channel（传输连接）→ Link（字节流）→ Driver（协议/点表编译）→ Device/Point；
+   驱动跟随设备包（`manifest.protocol.driver`），一条通道允许混协议设备。
+3. **通道语义**：一条 Link 单任务串行事务；单事务超时→重试→设备离线→周期探测恢复；
+   链路 I/O/关闭→整通道 `recovering` 退避重连；离线期间 tag 质量 `comm_lost`（保留最后好值）。
+   错误分类由 `DriverError::poll_class` 决定（LinkDead / Retry / Fatal）。
 4. **质量戳**（good/bad/uncertain/comm_lost）必须贯穿所有数据路径。
 5. **订阅制**：UI 只订阅当前画面 tag；`changes` 10~20ms 合并批量推。
-6. **设备包 = 声明式 JSON**（地址用设备手册工程记法如 `40101`；多字类型必须显式 byteOrder）。
-   校验用 serde 强类型 + 语义规则（`crates/packaging/src/validate.rs`），另有 JSON Schema
-   文件供编辑器补全（`crates/packaging/schema/`）。
+6. **设备包 = 声明式 JSON v2**（`protocol.driver` + `transports` + `params`；点地址 `address`，
+   寄存器类协议用设备手册工程记法如 `40101`，其他协议用对象）。校验用 serde 强类型 +
+   通用语义规则 + 驱动 `validate_package`，另有 JSON Schema 文件供编辑器补全。
 7. **前端已定**：Vue 3 + Vite + TypeScript + Pinia + Naive UI（仅表单）；
    外壳/表格/弹窗自绘。单例 WS 客户端 + 订阅引用计数，页面只读 Pinia。
 

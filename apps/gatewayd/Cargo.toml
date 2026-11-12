@@ -14,7 +14,10 @@ hmi-domain = { workspace = true }
 hmi-wire = { workspace = true }
 hmi-gateway = { workspace = true }
 hmi-packaging = { workspace = true }
-hmi-driver-modbus-rtu = { workspace = true }
+hmi-driver-modbus = { workspace = true }
+hmi-transport-serial = { workspace = true }
+hmi-transport-tcp = { workspace = true }
+hmi-transport-sim = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }

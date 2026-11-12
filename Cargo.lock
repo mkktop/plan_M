@@ -1551,17 +1551,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "hmi-driver-modbus-rtu"
+name = "hmi-driver-modbus"
 version = "0.1.2"
 dependencies = [
  "async-trait",
- "futures",
  "hmi-domain",
+ "hmi-transport-sim",
+ "hmi-transport-tcp",
  "serde",
- "serialport",
+ "serde_json",
  "thiserror 2.0.21",
  "tokio",
- "tokio-serial",
  "tracing",
 ]
 
@@ -1573,8 +1573,10 @@ dependencies = [
  "async-trait",
  "dashmap",
  "hmi-domain",
- "hmi-driver-modbus-rtu",
+ "hmi-driver-modbus",
  "hmi-packaging",
+ "hmi-transport-sim",
+ "hmi-transport-tcp",
  "hmi-wire",
  "semver",
  "serde",
@@ -1596,9 +1598,12 @@ dependencies = [
  "dirs 5.0.1",
  "futures",
  "hmi-domain",
- "hmi-driver-modbus-rtu",
+ "hmi-driver-modbus",
  "hmi-gateway",
  "hmi-packaging",
+ "hmi-transport-serial",
+ "hmi-transport-sim",
+ "hmi-transport-tcp",
  "hmi-wire",
  "semver",
  "serde",
@@ -1617,6 +1622,7 @@ name = "hmi-packaging"
 version = "0.1.2"
 dependencies = [
  "hmi-domain",
+ "hmi-driver-modbus",
  "semver",
  "serde",
  "serde_json",
@@ -1624,6 +1630,39 @@ dependencies = [
  "thiserror 2.0.21",
  "tracing",
  "zip",
+]
+
+[[package]]
+name = "hmi-transport-serial"
+version = "0.1.2"
+dependencies = [
+ "async-trait",
+ "hmi-domain",
+ "serde",
+ "serialport",
+ "tokio",
+ "tokio-serial",
+ "tracing",
+]
+
+[[package]]
+name = "hmi-transport-sim"
+version = "0.1.2"
+dependencies = [
+ "async-trait",
+ "hmi-domain",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "hmi-transport-tcp"
+version = "0.1.2"
+dependencies = [
+ "async-trait",
+ "hmi-domain",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

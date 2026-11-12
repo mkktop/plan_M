@@ -26,6 +26,7 @@ export function installGatewayBridge(): void {
     switch (msg.type) {
       case 'welcome':
         conn.state.hostVersion = msg.hostVersion
+        project.applyWelcome(msg)
         // 重连/首连都拉一次全量：UI 可能在断线期间错过了配置变更。
         void project.refresh().catch((e) => {
           console.warn('拉取快照失败', e)

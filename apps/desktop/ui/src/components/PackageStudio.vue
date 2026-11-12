@@ -44,6 +44,13 @@ const emit = defineEmits<{
 const project = useProjectStore()
 const toast = useToastStore()
 
+const driverOptions = computed(() =>
+  project.drivers.length
+    ? project.drivers.map((d) => ({ label: d.name, value: d.id }))
+    : [{ label: 'Modbus', value: 'modbus' }],
+)
+const byteOrderOptions = ['abcd', 'badc', 'cdab', 'dcba'].map((v) => ({ label: v, value: v }))
+
 type Step = 'meta' | 'points' | 'pages' | 'preview'
 const step = ref<Step>('meta')
 const steps: { id: Step; label: string; hint: string }[] = [
@@ -75,7 +82,7 @@ function pointOf(id: string): DraftPoint | undefined {
 
 function bitOptionsOf(pointId: string): { label: string; value: number }[] {
   const p = pointOf(pointId)
-  if (!p || isBitArea(p.register)) return []
+  if (!p || isBitArea(p.address)) return []
   return p.bits.map((b) => ({
     label: `b${b.bit ?? 0} ${b.name || ''}`.trim(),
     value: b.bit ?? 0,
@@ -89,8 +96,8 @@ const expanded = reactive<Record<string, boolean>>({})
 function addPoint(): void {
   const p = newPoint(draft.points.length)
   const last = draft.points[draft.points.length - 1]
-  const lastReg = parseInt(last?.register ?? '', 10)
-  if (Number.isFinite(lastReg)) p.register = String(lastReg + 1)
+  const lastReg = parseInt(last?.address ?? '', 10)
+  if (Number.isFinite(lastReg)) p.address = String(lastReg + 1)
   if (last?.pollGroup) p.pollGroup = last.pollGroup
   draft.points.push(p)
   expanded[p.key] = true
@@ -415,7 +422,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="field">
             <label>驱动</label>
-            <n-select v-model:value="draft.meta.driver" :options="[{ label: 'Modbus RTU', value: 'modbus-rtu' }]" />
+            <n-select v-model:value="draft.meta.driver" :options="driverOptions" />
           </div>
           <div class="field span-2">
             <label>描述</label>
@@ -478,20 +485,27 @@ onBeforeUnmount(() => {
             <div class="studio-point-head">
               <n-input v-model:value="p.id" size="small" placeholder="id" class="mono" style="width: 130px" />
               <n-input v-model:value="p.name" size="small" placeholder="显示名" style="width: 180px" />
-              <n-input v-model:value="p.register" size="small" placeholder="40101" class="mono" style="width: 110px" />
-              <span class="studio-area mono">{{ areaOfRegister(p.register) ?? '?' }}</span>
+              <n-input v-model:value="p.address" size="small" placeholder="40101" class="mono" style="width: 110px" />
+              <span class="studio-area mono">{{ areaOfRegister(p.address) ?? '?' }}</span>
               <n-select
                 v-model:value="p.type"
                 size="small"
                 :options="POINT_TYPES.map((t) => ({ label: t, value: t }))"
-                :disabled="isBitArea(p.register)"
+                :disabled="isBitArea(p.address)"
                 style="width: 100px"
+              />
+              <n-select
+                v-model:value="p.byteOrder"
+                size="small"
+                :options="byteOrderOptions"
+                :disabled="isBitArea(p.address)"
+                style="width: 88px"
               />
               <n-select
                 v-model:value="p.access"
                 size="small"
                 :options="[{ label: '只读 r', value: 'r' }, { label: '读写 rw', value: 'rw' }]"
-                :disabled="areaOfRegister(p.register) === 'input' || areaOfRegister(p.register) === 'discrete'"
+                :disabled="areaOfRegister(p.address) === 'input' || areaOfRegister(p.address) === 'discrete'"
                 style="width: 100px"
               />
               <n-select
@@ -508,7 +522,7 @@ onBeforeUnmount(() => {
             </div>
 
             <div v-if="expanded[p.key]" class="studio-point-more">
-              <template v-if="!isBitArea(p.register)">
+              <template v-if="!isBitArea(p.address)">
                 <label class="studio-mini">
                   scale
                   <n-input-number v-model:value="p.scale" size="tiny" :step="0.1" placeholder="1" />
@@ -535,7 +549,7 @@ onBeforeUnmount(() => {
                 <n-input v-model:value="p.unit" size="tiny" placeholder="V / A / kWh" style="width: 110px" />
               </label>
 
-              <div v-if="!isBitArea(p.register)" class="studio-sub">
+              <div v-if="!isBitArea(p.address)" class="studio-sub">
                 <div class="studio-sub-head">
                   <span>状态位（可空，16 位字）</span>
                   <n-button size="tiny" quaternary @click="addBit(p)">加位</n-button>
@@ -549,7 +563,7 @@ onBeforeUnmount(() => {
                 </div>
               </div>
 
-              <div v-if="!isBitArea(p.register)" class="studio-sub">
+              <div v-if="!isBitArea(p.address)" class="studio-sub">
                 <div class="studio-sub-head">
                   <span>枚举写值（仅整数类型）</span>
                   <n-button size="tiny" quaternary @click="addEnum(p)">加项</n-button>

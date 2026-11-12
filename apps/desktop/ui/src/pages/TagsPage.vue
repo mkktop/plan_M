@@ -23,6 +23,7 @@ import {
   typeLabel,
   valueText,
 } from '@/utils/format'
+import { addressLabel, addressText, channelSummary } from '@/utils/transport'
 
 interface BitRow extends BitDto {
   value?: boolean
@@ -283,7 +284,7 @@ function gotoDevices(): void {
             <span class="online-dot" :class="{ on: d.online }" />
             <span class="device-item-main">
               <strong>{{ d.name || d.id }}</strong>
-              <small class="mono">{{ d.id }} · #{{ d.slave }}</small>
+              <small class="mono">{{ d.id }} · {{ addressLabel(d.address) }}</small>
             </span>
             <span class="device-item-pkg">{{ project.packageOf(d)?.name ?? d.package }}</span>
           </button>
@@ -297,8 +298,8 @@ function gotoDevices(): void {
             <div class="row gap-8 align-center">
               <span class="online-dot" :class="{ on: selected.online }" />
               <h3>{{ selected.name || selected.id }}</h3>
-              <span class="slave-badge mono">#{{ selected.slave }}</span>
-              <span class="muted small">{{ selectedChannel?.name || selected.channelId }} · {{ selectedChannel?.port }}</span>
+              <span class="slave-badge mono">{{ addressLabel(selected.address) }}</span>
+              <span class="muted small">{{ selectedChannel?.name || selected.channelId }} · {{ selectedChannel ? channelSummary(selectedChannel) : '—' }}</span>
             </div>
             <div class="tags-sub muted small">
               {{ selectedPkg?.name }} v{{ selectedPkg?.version }} · {{ tagCount }} 个 tag ·
@@ -332,7 +333,7 @@ function gotoDevices(): void {
               <span class="point-name">{{ row.point.name || row.point.id }}</span>
               <code class="point-id">{{ row.point.id }}</code>
             </div>
-            <div class="cell mono muted">{{ row.point.register }}</div>
+            <div class="cell mono muted">{{ addressText(row.point.address) }}</div>
             <div class="cell">
               <span class="type-chip">{{ typeLabel(row.point) }}</span>
             </div>
@@ -383,7 +384,7 @@ function gotoDevices(): void {
       @close="writeOpen = false"
     >
       <div class="write-summary">
-        <div><span class="label">地址</span><span class="mono">{{ writeTarget.point.register }}</span></div>
+        <div><span class="label">地址</span><span class="mono">{{ addressText(writeTarget.point.address) }}</span></div>
         <div><span class="label">类型</span><span>{{ typeLabel(writeTarget.point) }}</span></div>
         <div><span class="label">当前值</span><span class="mono">{{ writeTarget.valueText }} {{ writeTarget.point.unit }}</span></div>
       </div>

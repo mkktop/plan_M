@@ -2,15 +2,19 @@ import { computed, reactive, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { gateway } from '@/api/ws'
 import type {
+  ChannelConfig,
   ChannelDto,
   ClientMsg,
+  DeviceAddress,
   DeviceConfig,
   DeviceDto,
+  DriverInfoDto,
   PackageDto,
-  SerialChannelConfig,
-  SerialPortDto,
+  ScanRange,
   SnapshotData,
   SnapshotMsg,
+  TransportKind,
+  TransportTarget,
 } from '@/api/types'
 
 /** 工程快照：通道/设备/设备包。业务真值在 gatewayd，这里只是最近一次快照的视图。 */
@@ -19,7 +23,11 @@ export const useProjectStore = defineStore('project', () => {
   const devices = ref<DeviceDto[]>([])
   const packages = ref<PackageDto[]>([])
   const channelStates = reactive<Record<string, string>>({})
-  const serialPorts = ref<SerialPortDto[]>([])
+  /** 宿主能力（Welcome 下发） */
+  const apiVersion = ref(0)
+  const transports = ref<TransportKind[]>([])
+  const drivers = ref<DriverInfoDto[]>([])
+  const targets = reactive<Partial<Record<TransportKind, TransportTarget[]>>>({})
   const loaded = ref(false)
   const refreshing = ref(false)
 
@@ -36,6 +44,16 @@ export const useProjectStore = defineStore('project', () => {
       0,
     ),
   )
+
+  function applyWelcome(msg: {
+    apiVersion: number
+    transports: TransportKind[]
+    drivers: DriverInfoDto[]
+  }): void {
+    apiVersion.value = msg.apiVersion
+    transports.value = msg.transports
+    drivers.value = msg.drivers
+  }
 
   function applySnapshot(s: SnapshotData): void {
     channels.value = s.channels
@@ -70,6 +88,18 @@ export const useProjectStore = defineStore('project', () => {
     return device ? packageById.value.get(device.package) : undefined
   }
 
+  function channelOf(device?: DeviceDto | null): ChannelDto | undefined {
+    return device ? channels.value.find((c) => c.id === device.channelId) : undefined
+  }
+
+  function isTransportSupported(kind: TransportKind): boolean {
+    return transports.value.includes(kind)
+  }
+
+  function driversForTransport(kind: TransportKind): DriverInfoDto[] {
+    return drivers.value.filter((d) => d.transports.includes(kind))
+  }
+
   async function refresh(): Promise<void> {
     if (refreshing.value) return
     refreshing.value = true
@@ -86,13 +116,19 @@ export const useProjectStore = defineStore('project', () => {
     applySnapshot(r)
   }
 
-  async function loadSerialPorts(): Promise<SerialPortDto[]> {
-    const r = await gateway.request<{ type: 'serialPorts'; ports: SerialPortDto[] }>(
-      { type: 'getSerialPorts' },
-      ['serialPorts', 'error'],
-    )
-    serialPorts.value = r.ports
-    return r.ports
+  async function loadTransportTargets(kind: TransportKind): Promise<TransportTarget[]> {
+    const r = await gateway.request<{
+      type: 'transportTargets'
+      transport: TransportKind
+      targets: TransportTarget[]
+    }>({ type: 'getTransportTargets', transport: kind }, ['transportTargets', 'error'])
+    targets[kind] = r.targets
+    return r.targets
+  }
+
+  /** 兼容旧调用：串口候选列表。 */
+  async function loadSerialPorts(): Promise<TransportTarget[]> {
+    return loadTransportTargets('serial')
   }
 
   async function loadPackages(): Promise<PackageDto[]> {
@@ -104,17 +140,21 @@ export const useProjectStore = defineStore('project', () => {
     return r.packages
   }
 
-  async function scanChannel(channel: string, range: [number, number]): Promise<number[]> {
+  async function scanChannel(
+    channel: string,
+    range: ScanRange,
+    driver?: string | null,
+  ): Promise<DeviceAddress[]> {
     // 扫描是串行探测，最坏情况几十秒（247 × 超时 × 重试），超时放宽。
-    const r = await gateway.request<{ type: 'scanDone'; channel: string; found: number[] }>(
-      { type: 'scanChannel', channel, range },
-      ['scanDone', 'error'],
-      180_000,
-    )
+    const r = await gateway.request<{
+      type: 'scanDone'
+      channel: string
+      found: DeviceAddress[]
+    }>({ type: 'scanChannel', channel, driver: driver ?? null, range }, ['scanDone', 'error'], 180_000)
     return r.found
   }
 
-  async function upsertChannel(config: SerialChannelConfig): Promise<void> {
+  async function upsertChannel(config: ChannelConfig): Promise<void> {
     await command({ type: 'upsertChannel', config })
   }
 
@@ -143,19 +183,27 @@ export const useProjectStore = defineStore('project', () => {
     devices,
     packages,
     channelStates,
-    serialPorts,
+    apiVersion,
+    transports,
+    drivers,
+    targets,
     loaded,
     refreshing,
     packageById,
     onlineDeviceCount,
     totalPointCount,
+    applyWelcome,
     applySnapshot,
     applyPackages,
     applyChannelState,
     applyDeviceState,
     devicesOn,
     packageOf,
+    channelOf,
+    isTransportSupported,
+    driversForTransport,
     refresh,
+    loadTransportTargets,
     loadSerialPorts,
     loadPackages,
     scanChannel,

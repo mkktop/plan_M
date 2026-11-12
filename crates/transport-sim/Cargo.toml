@@ -1,0 +1,12 @@
+[package]
+name = "hmi-transport-sim"
+description = "进程内虚拟传输：字节管道 + 可插拔应答器（测试/演示）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+hmi-domain = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde_json = { workspace = true }

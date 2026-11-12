@@ -1,7 +1,9 @@
 //! 设备包语义校验：解析成功之后、可安装之前的第二道门。
 
 use crate::manifest::PackageManifest;
+use hmi_domain::driver::Driver;
 use hmi_domain::points::PointsTable;
+use std::sync::Arc;
 
 /// 宿主提供的设备页面组件白名单。设备包只能用这些 kind（或自带 ESM 组件 /
 /// `plugin:` 插件组件）；增删核心组件需同步宿主 `ui/src/utils/devicePages.ts`。
@@ -165,19 +167,30 @@ impl ValidationIssues {
 
 /// 校验 manifest + 点表的一致性与合法性。
 ///
-/// 入参可以是磁盘上的原始形态：函数内部先做 v2 → v1 归一化（只影响副本）。
-pub fn validate_package(manifest: &PackageManifest, table: &PointsTable) -> ValidationIssues {
+/// `drivers` 是宿主已注册的驱动列表：驱动必须存在，包声明的 transports
+/// 必须是驱动能力的子集，点表的协议相关规则由驱动补充校验。
+pub fn validate_package(
+    manifest: &PackageManifest,
+    table: &PointsTable,
+    drivers: &[Arc<dyn Driver>],
+) -> ValidationIssues {
     let mut normalized = manifest.clone();
     normalized.ui.normalize(&normalized.id);
     let manifest = &normalized;
     let mut v = ValidationIssues::default();
-    validate_manifest(manifest, &mut v);
+    validate_manifest(manifest, drivers, &mut v);
     validate_ui(manifest, table, &mut v);
     validate_points(table, &mut v);
+
+    if let Some(driver) = drivers.iter().find(|d| d.id() == manifest.protocol.driver) {
+        let issues = driver.validate_package(table, &manifest.protocol);
+        v.errors.extend(issues.errors);
+        v.warnings.extend(issues.warnings);
+    }
     v
 }
 
-fn validate_manifest(m: &PackageManifest, v: &mut ValidationIssues) {
+fn validate_manifest(m: &PackageManifest, drivers: &[Arc<dyn Driver>], v: &mut ValidationIssues) {
     // id：小写字母/数字，点或横线分隔，至少两段
     let id = &m.id;
     let lowered = id.to_lowercase();
@@ -198,10 +211,41 @@ fn validate_manifest(m: &PackageManifest, v: &mut ValidationIssues) {
     }
     if m.protocol.driver.trim().is_empty() {
         v.error("manifest.protocol.driver 不能为空");
+    } else {
+        match drivers.iter().find(|d| d.id() == m.protocol.driver) {
+            None => {
+                let known: Vec<&str> = drivers.iter().map(|d| d.id()).collect();
+                v.error(format!(
+                    "protocol.driver `{}` 未注册（宿主支持: {}）",
+                    m.protocol.driver,
+                    if known.is_empty() {
+                        "无".to_string()
+                    } else {
+                        known.join(", ")
+                    }
+                ));
+            }
+            Some(driver) => {
+                for t in &m.protocol.transports {
+                    if !driver.transports().contains(t) {
+                        v.error(format!(
+                            "protocol.transports 包含 `{t}`，但驱动 `{}` 只支持：{}",
+                            driver.id(),
+                            driver
+                                .transports()
+                                .iter()
+                                .map(|x| x.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ));
+                    }
+                }
+            }
+        }
     }
-    if m.schema_version != 1 {
+    if m.schema_version != 2 {
         v.error(format!(
-            "不支持的 schemaVersion {}（当前宿主支持 1）",
+            "不支持的 schemaVersion {}（当前宿主支持 2）",
             m.schema_version
         ));
     }
@@ -587,97 +631,54 @@ fn validate_points(t: &PointsTable, v: &mut ValidationIssues) {
             referenced.push("default");
         }
 
-        let wc = p.data_type.word_count() as u32;
-        let reg = &p.register;
-
-        // 位区域（Coil/Discrete）
-        if reg.area.is_bit_area() {
-            if !p.bits.is_empty() {
-                v.error(format!("{ctx}：位区域点不支持 bits 展开"));
-            }
-        } else {
-            // 字区域
-            if reg.offset as u32 + wc > 65536 {
-                v.error(format!(
-                    "{ctx}：地址 {} + {} 字超出 16 位地址空间",
-                    reg.to_engineering(),
-                    wc
-                ));
-            }
-            // bits 只允许单字类型
-            if !p.bits.is_empty() {
-                if wc != 1 {
-                    v.error(format!(
-                        "{ctx}：bits 只支持 16 位类型（当前 {}）",
-                        p.data_type.as_str()
-                    ));
-                }
-                for (&bit, def) in &p.bits {
-                    if bit >= 16 {
-                        v.error(format!("{ctx}：位号 {bit} 超出 0-15"));
-                    }
-                    if def.name.trim().is_empty() {
-                        v.error(format!("{ctx}：b{bit} 的 name 为空"));
-                    }
-                }
-            }
-        }
-
-        // 读写属性
-        if p.access == hmi_domain::points::Access::Rw && !reg.area.writable() {
-            v.error(format!("{ctx}：区域 {} 只读，不能声明为 rw", reg.area));
-        }
-
         if p.scale == Some(0.0) {
             v.error(format!("{ctx}：scale 为 0（非法换算）"));
         }
 
-        // 写值元数据：边界/步长/枚举都按工程量口径解释
-        if p.is_bit_point() {
-            if p.min.is_some() || p.max.is_some() || p.step.is_some() || !p.value_enum.is_empty() {
-                v.error(format!("{ctx}：位区域点不支持 min/max/step/enum"));
+        // 位展开是通用元数据；地址/类型是否支持由驱动校验
+        for (&bit, def) in &p.bits {
+            if bit >= 16 {
+                v.error(format!("{ctx}：位号 {bit} 超出 0-15"));
             }
-        } else {
-            if let (Some(lo), Some(hi)) = (p.min, p.max) {
-                if lo > hi {
-                    v.error(format!("{ctx}：min({lo}) 不能大于 max({hi})"));
-                }
-            }
-            if p.min.is_some_and(|x| !x.is_finite()) || p.max.is_some_and(|x| !x.is_finite()) {
-                v.error(format!("{ctx}：min/max 必须是有限数值"));
-            }
-            if let Some(step) = p.step {
-                if !step.is_finite() || step <= 0.0 {
-                    v.error(format!("{ctx}：step 必须大于 0"));
-                }
-            }
-            if !p.value_enum.is_empty() {
-                if !p.data_type.is_integer() {
-                    v.error(format!(
-                        "{ctx}：enum 仅支持整数类型（当前 {}）",
-                        p.data_type.as_str()
-                    ));
-                }
-                let mut enum_values = std::collections::HashSet::new();
-                for e in &p.value_enum {
-                    if e.label.trim().is_empty() {
-                        v.error(format!("{ctx}：enum 项 value={} 的 label 为空", e.value));
-                    }
-                    if !enum_values.insert(e.value) {
-                        v.error(format!("{ctx}：enum value={} 重复", e.value));
-                    }
-                    let ev = e.value as f64;
-                    if p.min.is_some_and(|lo| ev < lo) || p.max.is_some_and(|hi| ev > hi) {
-                        v.error(format!("{ctx}：enum value={} 超出 [min,max]", e.value));
-                    }
-                }
+            if def.name.trim().is_empty() {
+                v.error(format!("{ctx}：b{bit} 的 name 为空"));
             }
         }
 
-        if p.data_type.word_count() > 1 && p.byte_order.is_none() {
-            v.warn(format!(
-                "{ctx}：多字类型未声明 byteOrder，将用包默认或 abcd（多字字节序是 485 头号坑，建议显式声明）"
-            ));
+        // 写值元数据：边界/步长/枚举都按工程量口径解释
+        if let (Some(lo), Some(hi)) = (p.min, p.max) {
+            if lo > hi {
+                v.error(format!("{ctx}：min({lo}) 不能大于 max({hi})"));
+            }
+        }
+        if p.min.is_some_and(|x| !x.is_finite()) || p.max.is_some_and(|x| !x.is_finite()) {
+            v.error(format!("{ctx}：min/max 必须是有限数值"));
+        }
+        if let Some(step) = p.step {
+            if !step.is_finite() || step <= 0.0 {
+                v.error(format!("{ctx}：step 必须大于 0"));
+            }
+        }
+        if !p.value_enum.is_empty() {
+            if !p.data_type.is_integer() {
+                v.error(format!(
+                    "{ctx}：enum 仅支持整数类型（当前 {}）",
+                    p.data_type.as_str()
+                ));
+            }
+            let mut enum_values = std::collections::HashSet::new();
+            for e in &p.value_enum {
+                if e.label.trim().is_empty() {
+                    v.error(format!("{ctx}：enum 项 value={} 的 label 为空", e.value));
+                }
+                if !enum_values.insert(e.value) {
+                    v.error(format!("{ctx}：enum value={} 重复", e.value));
+                }
+                let ev = e.value as f64;
+                if p.min.is_some_and(|lo| ev < lo) || p.max.is_some_and(|hi| ev > hi) {
+                    v.error(format!("{ctx}：enum value={} 超出 [min,max]", e.value));
+                }
+            }
         }
     }
 
@@ -697,13 +698,17 @@ mod tests {
     use super::*;
     use crate::manifest::PackageManifest;
 
+    fn test_drivers() -> Vec<Arc<dyn Driver>> {
+        vec![Arc::new(hmi_driver_modbus::ModbusDriver::new())]
+    }
+
     fn manifest() -> PackageManifest {
         serde_json::from_value(serde_json::json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "id": "com.acme.pm3000",
             "name": "PM3000",
             "version": "1.0.0",
-            "protocol": { "driver": "modbus-rtu" }
+            "protocol": { "driver": "modbus" }
         }))
         .unwrap()
     }
@@ -717,10 +722,10 @@ mod tests {
         let t = points_json(serde_json::json!({
             "pollGroups": [{ "name": "fast", "intervalMs": 1000 }],
             "points": [
-                { "id": "voltage", "register": "40101", "type": "u16", "scale": 0.1, "pollGroup": "fast" }
+                { "id": "voltage", "address": "40101", "type": "u16", "scale": 0.1, "pollGroup": "fast" }
             ]
         }));
-        let v = validate_package(&manifest(), &t);
+        let v = validate_package(&manifest(), &t, &test_drivers());
         assert!(v.ok(), "{v:?}");
         assert!(v.warnings.is_empty());
     }
@@ -730,11 +735,11 @@ mod tests {
         let t = points_json(serde_json::json!({
             "pollGroups": [{ "name": "fast", "intervalMs": 0 }],
             "points": [
-                { "id": "a", "register": "40101", "pollGroup": "fast" },
-                { "id": "a", "register": "40102", "pollGroup": "nope" }
+                { "id": "a", "address": "40101", "pollGroup": "fast" },
+                { "id": "a", "address": "40102", "pollGroup": "nope" }
             ]
         }));
-        let v = validate_package(&manifest(), &t);
+        let v = validate_package(&manifest(), &t, &test_drivers());
         assert!(!v.ok());
         assert!(v.errors.iter().any(|e| e.contains("id 重复")));
         assert!(v.errors.iter().any(|e| e.contains("未定义的轮询组")));
@@ -745,10 +750,10 @@ mod tests {
     fn catches_readonly_write() {
         let t = points_json(serde_json::json!({
             "points": [
-                { "id": "ir", "register": "30100", "type": "u16", "access": "rw" }
+                { "id": "ir", "address": "30100", "type": "u16", "access": "rw" }
             ]
         }));
-        let v = validate_package(&manifest(), &t);
+        let v = validate_package(&manifest(), &t, &test_drivers());
         assert!(v.errors.iter().any(|e| e.contains("只读")));
     }
 
@@ -756,29 +761,45 @@ mod tests {
     fn catches_bad_bits() {
         let t = points_json(serde_json::json!({
             "points": [
-                { "id": "st", "register": "40300", "type": "u32",
+                { "id": "st", "address": "40300", "type": "u32",
                   "bits": { "20": { "name": "x" } } }
             ]
         }));
-        let v = validate_package(&manifest(), &t);
-        assert!(v.errors.iter().any(|e| e.contains("bits 只支持")));
+        let v = validate_package(&manifest(), &t, &test_drivers());
+        assert!(v.errors.iter().any(|e| e.contains("bits")));
     }
 
     #[test]
     fn warns_missing_byte_order_multiword() {
         let t = points_json(serde_json::json!({
-            "points": [ { "id": "e", "register": "40200", "type": "u32" } ]
+            "points": [ { "id": "e", "address": "40200", "type": "u32" } ]
         }));
-        let v = validate_package(&manifest(), &t);
+        let v = validate_package(&manifest(), &t, &test_drivers());
         assert!(v.ok());
         assert!(v.warnings.iter().any(|w| w.contains("byteOrder")));
+    }
+
+    #[test]
+    fn unknown_driver_rejected() {
+        let mut m = manifest();
+        m.protocol.driver = "does-not-exist".into();
+        let v = validate_package(&m, &PointsTable::default(), &test_drivers());
+        assert!(v.errors.iter().any(|e| e.contains("未注册")), "{v:?}");
+    }
+
+    #[test]
+    fn package_transport_must_be_supported() {
+        let mut m = manifest();
+        m.protocol.transports = vec![hmi_domain::link::TransportKind::Ble];
+        let v = validate_package(&m, &PointsTable::default(), &test_drivers());
+        assert!(v.errors.iter().any(|e| e.contains("transports")), "{v:?}");
     }
 
     #[test]
     fn bad_manifest_id_rejected() {
         let mut m = manifest();
         m.id = "PM 3000".into();
-        let v = validate_package(&m, &PointsTable::default());
+        let v = validate_package(&m, &PointsTable::default(), &test_drivers());
         assert!(v.errors.iter().any(|e| e.contains("manifest.id")));
     }
 
@@ -795,7 +816,7 @@ mod tests {
             ]
         }))
         .unwrap();
-        let v = validate_package(&m, &PointsTable::default());
+        let v = validate_package(&m, &PointsTable::default(), &test_drivers());
         assert!(v.errors.iter().any(|e| e.contains("id 重复")));
         assert!(v.errors.iter().any(|e| e.contains("未知组件")));
         assert!(v.errors.iter().any(|e| e.contains("至少需要一个组件")));
@@ -811,7 +832,7 @@ mod tests {
             ]
         }))
         .unwrap();
-        let v = validate_package(&m, &PointsTable::default());
+        let v = validate_package(&m, &PointsTable::default(), &test_drivers());
         assert!(v.ok(), "{v:?}");
     }
 
@@ -819,8 +840,8 @@ mod tests {
     fn ui_relative_bindings_validated() {
         let t = points_json(serde_json::json!({
             "points": [
-                { "id": "uab", "register": "40101", "type": "u16" },
-                { "id": "status", "register": "40300", "type": "u16",
+                { "id": "uab", "address": "40101", "type": "u16" },
+                { "id": "status", "address": "40300", "type": "u16",
                   "bits": { "0": { "name": "运行" } } }
             ]
         }));
@@ -837,7 +858,7 @@ mod tests {
             ]
         }))
         .unwrap();
-        let v = validate_package(&m, &t);
+        let v = validate_package(&m, &t, &test_drivers());
         assert!(!v.ok());
         assert!(v.errors.iter().any(|e| e.contains("不在点表")), "{v:?}");
         assert!(v.errors.iter().any(|e| e.contains("绝对 tag")), "{v:?}");
@@ -848,16 +869,16 @@ mod tests {
     fn write_metadata_validated() {
         let t = points_json(serde_json::json!({
             "points": [
-                { "id": "mode", "register": "40311", "type": "u16", "access": "rw",
+                { "id": "mode", "address": "40311", "type": "u16", "access": "rw",
                   "min": 0, "max": 2, "step": 1,
                   "enum": [ { "value": 0, "label": "自动" }, { "value": 1, "label": "手动" } ] },
-                { "id": "bad", "register": "40312", "type": "f32", "access": "rw",
+                { "id": "bad", "address": "40312", "type": "f32", "access": "rw",
                   "min": 5, "max": 1, "step": 0,
                   "enum": [ { "value": 0, "label": "" } ] },
-                { "id": "coil", "register": "00010", "min": 0 }
+                { "id": "coil", "address": "00010", "min": 0 }
             ]
         }));
-        let v = validate_package(&manifest(), &t);
+        let v = validate_package(&manifest(), &t, &test_drivers());
         assert!(!v.ok());
         assert!(
             v.errors
@@ -874,10 +895,7 @@ mod tests {
             "{v:?}"
         );
         assert!(v.errors.iter().any(|e| e.contains("label 为空")), "{v:?}");
-        assert!(
-            v.errors.iter().any(|e| e.contains("位区域点不支持")),
-            "{v:?}"
-        );
+        assert!(v.errors.iter().any(|e| e.contains("位区域点")), "{v:?}");
     }
 
     #[test]
@@ -903,7 +921,7 @@ mod tests {
             ]
         }))
         .unwrap();
-        let v = validate_package(&m, &PointsTable::default());
+        let v = validate_package(&m, &PointsTable::default(), &test_drivers());
         assert_eq!(v.errors.len(), 3, "{v:?}");
         assert!(
             v.errors.iter().any(|e| e.contains("全部组件都声明")),
@@ -918,12 +936,12 @@ mod tests {
     fn valid_write_metadata_passes() {
         let t = points_json(serde_json::json!({
             "points": [
-                { "id": "mode", "register": "40311", "type": "u16", "access": "rw",
+                { "id": "mode", "address": "40311", "type": "u16", "access": "rw",
                   "min": 0, "max": 2, "step": 1,
                   "enum": [ { "value": 0, "label": "自动" }, { "value": 2, "label": "停止" } ] }
             ]
         }));
-        let v = validate_package(&manifest(), &t);
+        let v = validate_package(&manifest(), &t, &test_drivers());
         assert!(v.ok(), "{v:?}");
     }
 
@@ -944,7 +962,7 @@ mod tests {
             "pages": []
         }))
         .unwrap();
-        let v = validate_package(&m, &PointsTable::default());
+        let v = validate_package(&m, &PointsTable::default(), &test_drivers());
         assert!(!v.ok());
         assert!(v.errors.iter().any(|e| e.contains("id 重复")), "{v:?}");
         assert!(
@@ -967,7 +985,7 @@ mod tests {
     #[test]
     fn v2_widgets_and_group_validated() {
         let t = points_json(serde_json::json!({
-            "points": [ { "id": "uab", "register": "40101", "type": "u16" } ]
+            "points": [ { "id": "uab", "address": "40101", "type": "u16" } ]
         }));
         let mut m = manifest();
         m.ui = serde_json::from_value(serde_json::json!({
@@ -991,7 +1009,7 @@ mod tests {
             ]
         }))
         .unwrap();
-        let v = validate_package(&m, &t);
+        let v = validate_package(&m, &t, &test_drivers());
         assert!(!v.ok());
         assert!(v.errors.iter().any(|e| e.contains("不在点表")), "{v:?}");
         // 组件实例 id 重复
@@ -1004,7 +1022,7 @@ mod tests {
     #[test]
     fn v2_page_passes_validation() {
         let t = points_json(serde_json::json!({
-            "points": [ { "id": "uab", "register": "40101", "type": "u16" } ]
+            "points": [ { "id": "uab", "address": "40101", "type": "u16" } ]
         }));
         let mut m = manifest();
         m.ui = serde_json::from_value(serde_json::json!({
@@ -1022,7 +1040,7 @@ mod tests {
             ]
         }))
         .unwrap();
-        let v = validate_package(&m, &t);
+        let v = validate_package(&m, &t, &test_drivers());
         assert!(v.ok(), "{v:?}");
     }
 }

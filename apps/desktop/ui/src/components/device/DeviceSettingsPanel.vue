@@ -6,7 +6,8 @@ import EmptyState from '@/components/EmptyState.vue'
 import { useConnectionStore } from '@/stores/connection'
 import { useProjectStore } from '@/stores/project'
 import { errorMessage, useToastStore } from '@/stores/toast'
-import type { DeviceConfig } from '@/api/types'
+import { channelSummary, packageSupportsTransport } from '@/utils/transport'
+import type { DeviceAddress, DeviceConfig } from '@/api/types'
 
 const props = defineProps<{ deviceId: string }>()
 
@@ -20,14 +21,25 @@ const pointCount = computed(() =>
   pkg.value ? pkg.value.points.reduce((n, p) => n + 1 + p.bits.length, 0) : 0,
 )
 
-const channelOptions = computed(() =>
-  project.channels.map((c) => ({ label: `${c.name || c.id}（${c.port}）`, value: c.id })),
-)
+const channelOptions = computed(() => {
+  const p = pkg.value
+  return project.channels
+    .filter(
+      (c) =>
+        !p ||
+        c.id === form.channelId ||
+        packageSupportsTransport(p, c.transport, project.drivers),
+    )
+    .map((c) => ({
+      label: `${c.name || c.id}（${channelSummary(c)}）`,
+      value: c.id,
+    }))
+})
 
 const form = reactive({
   name: '',
   channelId: '',
-  slave: 1,
+  address: '1',
   overridesText: '{}',
 })
 const saving = ref(false)
@@ -38,7 +50,7 @@ function fillFromDevice(): void {
   if (!d) return
   form.name = d.name
   form.channelId = d.channelId
-  form.slave = d.slave
+  form.address = String(d.address)
   form.overridesText = JSON.stringify(d.overrides ?? {}, null, 2)
   error.value = ''
 }
@@ -53,9 +65,19 @@ async function save(): Promise<void> {
     error.value = '请选择通道'
     return
   }
-  if (form.slave < 1 || form.slave > 247) {
-    error.value = '从站地址需在 1–247'
+  if (!form.address.trim()) {
+    error.value = '设备地址必填'
     return
+  }
+  let address: DeviceAddress = /^\d+$/.test(form.address.trim())
+    ? Number(form.address.trim())
+    : form.address.trim()
+  if (pkg.value?.protocol.driver === 'modbus') {
+    const n = Number(address)
+    if (!Number.isInteger(n) || n < 1 || n > 247) {
+      error.value = 'Modbus 从站地址需为 1–247 的整数'
+      return
+    }
   }
   let overrides: Record<string, unknown> = {}
   const text = form.overridesText.trim()
@@ -76,7 +98,7 @@ async function save(): Promise<void> {
     name: form.name.trim() || d.id,
     channelId: form.channelId,
     package: d.package,
-    slave: form.slave,
+    address,
     overrides,
   }
   saving.value = true
@@ -109,8 +131,8 @@ async function save(): Promise<void> {
           <n-select v-model:value="form.channelId" :options="channelOptions" />
         </div>
         <div class="field">
-          <label>从站地址</label>
-          <n-input-number v-model:value="form.slave" :min="1" :max="247" style="width: 100%" />
+          <label>设备地址</label>
+          <n-input v-model:value="form.address" placeholder="1 / AA:BB:CC:DD:EE:FF" />
         </div>
         <div class="field">
           <label>设备 ID（不可修改）</label>
@@ -145,7 +167,7 @@ async function save(): Promise<void> {
         </div>
         <div class="kv">
           <dt>驱动</dt>
-          <dd class="mono">{{ pkg?.driver || '—' }}</dd>
+          <dd class="mono">{{ pkg?.protocol.driver || '—' }}</dd>
         </div>
       </dl>
 
@@ -155,7 +177,7 @@ async function save(): Promise<void> {
       </div>
 
       <div class="dev-settings-actions">
-        <span class="muted small">切换通道/从站会短暂中断该总线上的轮询。</span>
+        <span class="muted small">切换通道/地址会短暂中断该链路上的轮询。</span>
         <span class="spacer" />
         <n-button size="small" @click="fillFromDevice">还原</n-button>
         <n-button

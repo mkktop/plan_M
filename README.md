@@ -20,32 +20,39 @@
                │ HTTP /packages/<id>/<ver>/<entry>（设备包 ESM 组件）
 ┌──────────────┴──────────────┐
 │ gatewayd 采集进程（常驻）     │
-│ ├─ 通道监督器 × N（串口）     │
-│ ├─ 轮询编译器（读块合并）     │
+│ ├─ 通道监督器 × N（传输连接） │
+│ ├─ 驱动注册表（协议实现）     │
 │ ├─ TagHub 实时库（订阅分发）  │
 │ ├─ 设备包注册表（声明式）     │
 │ ├─ 工作区页面存储             │
 │ ├─ UI 插件注册表 + 静态服务   │
 │ └─ axum：/health + /ws + /plugins + /packages │
-└───┬─────────┬───────────────┘
- COM3      COM5     …（每条 485 总线一个通道，挂 N 个从站）
+└───┬─────────┬─────────┬─────┘
+ COM3      TCP:502    SIM …（每条连接一个通道，挂 N 台设备）
 ```
 
 设计纪律：
 
-- **domain / gateway / packaging 不依赖 tauri / 串口实现**。总线打开由 `BusOpener` 注入，
-  驱动通过 `Driver` 端口注入 —— gatewayd 负责接线。将来拆独立网关部署零重构。
-- **驱动跟随设备包声明**（`protocol.driver`），一条总线允许混协议设备。
+- **四层解耦**：Transport（串口/TCP/SIM/BLE）→ Link（字节流）→ Driver（协议）→ Device/Point。
+  domain/gateway/packaging 不依赖 tauri 或任何串口/驱动实现；gatewayd 只负责注册驱动与传输。
+- **驱动跟随设备包声明**（`protocol.driver`），一条通道允许混协议设备；同一设备包可跑在
+  串口与 TCP 上（`protocol.transports` 限制），Modbus 驱动按 `params.framing` 选 RTU/MBAP。
 - **质量戳从第一天跟随每个值**：通信中断 → `comm_lost`（保留最后好值），UI 据此变灰而不是显示假数据。
+
+深入阅读：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)（四层模型与契约）、
+[docs/PROTOCOL_EXTENSION.md](docs/PROTOCOL_EXTENSION.md)（新增传输/协议的检查清单，含 BLE 落点）。
 
 ## 目录
 
 ```
 crates/
-├─ domain/            纯模型：Tag/Quality/Modbus 地址工程记法/字节序编解码/点表/配置/端口 trait
-├─ driver-modbus-rtu/ Modbus RTU 驱动：帧编解码、串口传输、虚拟总线 + 内存从站（SimSlave）
+├─ domain/            纯契约：Tag/Quality/寄存器地址/编解码/点表/配置/Link/Driver/Transport 端口
+├─ transport-serial/  串口传输：SerialLink + COM 号漂移回退 + 串口枚举
+├─ transport-tcp/     TCP 传输：TcpLink（Modbus TCP / 串口服务器）
+├─ transport-sim/     进程内虚拟传输：字节管道 + 可插拔应答器
+├─ driver-modbus/     Modbus 驱动：PDU + RTU/MBAP 帧 + 点表编译 + 内存从站（SimSlave）
 ├─ packaging/         设备包与 UI 插件：manifest/点表/页面声明解析、语义校验、安装、注册表
-├─ gateway/           运行时：轮询编译器、通道监督器、TagHub、服务编排、
+├─ gateway/           通用运行时：通道监督器、TagHub、服务编排、
 │                     仪表盘布局（dashboards.json）、设备类型工作区（workspaces.json）
 └─ wire/              gatewayd ↔ UI 的 WS 消息契约（serde，两端共用）
 apps/
@@ -66,13 +73,17 @@ examples/ui-plugins/
 
 ```bash
 cargo build --workspace
-cargo test --workspace          # 136 个测试：编解码/帧/虚拟总线端到端/包校验/插件安装/工作区/仪表盘/WS 协议/包编辑器草稿/更新校验
+cargo test --workspace          # 编解码/PDU/RTU/MBAP/虚拟总线/TCP 端到端/包校验/插件/工作区/仪表盘/WS/包编辑器
 
 # 1) 校验示例设备包
 gatewayd pkg validate examples/packages/pm3000
 
 # 2) 无硬件轮询（虚拟从站 + 预置演示数据）
-gatewayd poll --package examples/packages/pm3000 --com SIM --once
+gatewayd poll --package examples/packages/pm3000 --transport sim --once
+
+# 3) Modbus TCP 演示从站 + 走 TCP 轮询（同一设备包，验证 WiFi 路径）
+gatewayd sim-tcp --listen 127.0.0.1:15020
+gatewayd poll --package examples/packages/pm3000 --transport tcp --host 127.0.0.1 --tcp-port 15020 --once
 
 # 3) 启动服务（--sim = 演示模式：自动装示例包 + SIM 总线 + 两台演示设备）
 gatewayd serve --sim
@@ -151,12 +162,16 @@ Tauri 侧只加了一个 `tauri-plugin-dialog`（文件/目录选择）与 `gate
 ```json
 // manifest.json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "com.acme.pm3000",
   "name": "ACME PM3000 三相电表",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "minHostVersion": "0.1.0",
-  "protocol": { "driver": "modbus-rtu", "defaults": { "byteOrder": "cdab", "respTimeoutMs": 150 } }
+  "protocol": {
+    "driver": "modbus",
+    "transports": ["serial", "tcp", "sim"],
+    "params": { "framing": "auto", "byteOrder": "cdab" }
+  }
 }
 ```
 
@@ -168,15 +183,15 @@ Tauri 侧只加了一个 `tauri-plugin-dialog`（文件/目录选择）与 `gate
     { "name": "slow", "intervalMs": 60000 }
   ],
   "points": [
-    { "id": "uab", "name": "AB线电压", "register": "40101", "type": "u16",
+    { "id": "uab", "name": "AB线电压", "address": "40101", "type": "u16",
       "scale": 0.1, "unit": "V", "pollGroup": "fast" },
-    { "id": "energy", "name": "有功电度", "register": "40200", "type": "u32",
+    { "id": "energy", "name": "有功电度", "address": "40200", "type": "u32",
       "byteOrder": "cdab", "scale": 0.01, "unit": "kWh", "pollGroup": "slow" },
-    { "id": "status", "register": "40300", "type": "u16",
+    { "id": "status", "address": "40300", "type": "u16",
       "bits": { "0": { "name": "运行" }, "2": { "name": "报警" } } },
-    { "id": "setpoint", "register": "40310", "type": "u16", "access": "rw",
+    { "id": "setpoint", "address": "40310", "type": "u16", "access": "rw",
       "min": 0, "max": 50000, "step": 100 },
-    { "id": "mode", "register": "40311", "type": "u16", "access": "rw",
+    { "id": "mode", "address": "40311", "type": "u16", "access": "rw",
       "min": 0, "max": 2, "step": 1,
       "enum": [ { "value": 0, "label": "自动" }, { "value": 1, "label": "手动" } ] }
   ]
@@ -187,6 +202,8 @@ Tauri 侧只加了一个 `tauri-plugin-dialog`（文件/目录选择）与 `gate
 
 - **地址用工程记法**（与设备手册口径一致）：`40101` 保持寄存器、`30001` 输入寄存器、
   `00010` 线圈、`10010` 离散量；也支持显式 `HR:100` / `IR:5` / `C:3` / `DR:7`。
+  非寄存器协议用对象地址（如 BLE 的 `{ "ble": { "service": "...", "characteristic": "..." } }`），
+  字符串只接受寄存器记法，由驱动校验。
 - **字节序显式声明**：`abcd`（标准）/ `cdab`（国产电表最常见字交换）/
   `badc`（字内字节交换）/ `dcba`（全反转）。多字值不写会 warning —— 485 头号坑。
 - **位展开**：状态字加 `bits` 后自动生成 `<点>.b0` 子 tag（只读）。
@@ -379,8 +396,9 @@ export function mount(el, ctx, props) {
 ## WS 协议（摘要，完整见 `crates/wire`）
 
 客户端 → 服务端：`hello{token}` / `getSnapshot` / `subscribe{tags}` / `unsubscribe` /
-`writeTag{tag,value}` / `scanChannel{channel,range}` / `getSerialPorts` / `getPackages` /
-`upsertChannel` / `removeChannel` / `addDevice` / `removeDevice` / `importPackage{path}` /
+`writeTag{tag,value}` / `scanChannel{channel,driver?,range?}` / `getTransportTargets{transport}` /
+`getPackages` / `upsertChannel{config}` / `removeChannel` / `addDevice{config}` / `removeDevice` /
+`importPackage{path}` /
 `removePackage{id}`（有设备在用时拒绝）/
 `getDashboards` / `saveDashboard{dashboard}` / `removeDashboard{id}` /
 `getUiPlugins` / `importUiPlugin{path}` / `removeUiPlugin{id}` /
@@ -388,10 +406,10 @@ export function mount(el, ctx, props) {
 `validatePackage{manifest,points}` / `installDraftPackage{manifest,points}` /
 `exportPackage{manifest,points,dir}`
 
-服务端 → 客户端：`welcome` / `snapshot` / `changes{items}`（10~20ms 合并批量）/
-`channelState` / `deviceState` / `scanProgress` / `scanDone` / `serialPorts` / `packages` /
-`dashboards` / `uiPlugins` / `workspaces` / `packageValidation{errors,warnings}` /
-`commandOk` / `error`
+服务端 → 客户端：`welcome{hostVersion,apiVersion,transports,drivers}` / `snapshot` /
+`changes{items}`（10~20ms 合并批量）/ `channelState` / `deviceState` / `scanProgress` /
+`scanDone{found: DeviceAddress[]}` / `transportTargets` / `packages` / `dashboards` /
+`uiPlugins` / `workspaces` / `packageValidation{errors,warnings}` / `commandOk` / `error`
 
 仪表盘布局（`DashboardDto`）：`{ id, name, cols, scopeKind?, scopeId?, widgets[] }`；widget 为
 `{ id, kind, title, tag, unit, config, layout{x,y,w,h} }`。`config` 由组件自行解释

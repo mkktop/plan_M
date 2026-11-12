@@ -89,6 +89,6 @@ export function safePointName(id: string): string {
   return id || '未命名点'
 }
 
-export function isBitArea(area: string): boolean {
+export function isBitArea(area?: string | null): boolean {
   return area === 'coil' || area === 'discrete'
 }

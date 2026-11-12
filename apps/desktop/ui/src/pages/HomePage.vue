@@ -8,6 +8,7 @@ import { usePluginsStore } from '@/stores/plugins'
 import { useProjectStore } from '@/stores/project'
 import { useTagsStore } from '@/stores/tags'
 import { nowMs } from '@/utils/clock'
+import { addressLabel } from '@/utils/transport'
 import { formatClock } from '@/utils/format'
 
 const router = useRouter()
@@ -177,7 +178,7 @@ function packageName(id: string): string {
             <span class="online-dot" :class="{ on: d.online }" />
             <div class="home-device-main">
               <strong>{{ d.name }}</strong>
-              <span class="mono muted small">{{ d.id }} · 从站 #{{ d.slave }}</span>
+              <span class="mono muted small">{{ d.id }} · {{ addressLabel(d.address) }}</span>
             </div>
             <span class="home-device-pkg" :title="packageName(d.package)">
               {{ packageName(d.package) }}

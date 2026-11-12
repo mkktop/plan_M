@@ -75,7 +75,7 @@ async fn ws_full_protocol_smoke() {
     // 1. 握手
     send(&mut ws, &ClientMsg::Hello { token }).await;
     match recv(&mut ws).await {
-        ServerMsg::Welcome { host_version } => {
+        ServerMsg::Welcome { host_version, .. } => {
             assert!(!host_version.is_empty());
         }
         other => panic!("期望 Welcome，得到 {other:?}"),
@@ -89,7 +89,10 @@ async fn ws_full_protocol_smoke() {
         }
     };
     assert_eq!(snap.channels.len(), 1);
-    assert_eq!(snap.channels[0].port, "SIM");
+    assert_eq!(
+        snap.channels[0].config.transport_kind(),
+        hmi_domain::link::TransportKind::Sim
+    );
     assert_eq!(snap.devices.len(), 2);
     assert!(snap.packages.iter().any(|p| p.id == "com.acme.pm3000"));
     let pm = snap

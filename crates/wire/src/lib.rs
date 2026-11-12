@@ -10,11 +10,16 @@
 
 use hmi_domain::addr::RegArea;
 use hmi_domain::codec::DataType;
-use hmi_domain::config::{DeviceConfig, Parity, SerialChannelConfig};
-use hmi_domain::points::Access;
+use hmi_domain::config::{ChannelConfig, DeviceAddress, DeviceConfig};
+use hmi_domain::link::{TransportKind, TransportTarget};
+use hmi_domain::points::{Access, PointAddress};
+use hmi_domain::protocol::{ProtocolDecl, ScanRange};
 use hmi_domain::value::{TagChange, Value};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+
+/// WS 契约版本。UI 用它判断是否支持宿主下发的消息形状。
+pub const API_VERSION: u32 = 2;
 
 // —— 客户端 → 服务端 ——
 
@@ -44,18 +49,22 @@ pub enum ClientMsg {
         tag: String,
         value: Value,
     },
-    /// 扫描通道上的从站（范围 1-247，缺省 1-32）
+    /// 扫描通道上的设备地址；`driver` 缺省时由宿主按通道选择唯一驱动
     ScanChannel {
         channel: String,
-        range: Option<(u8, u8)>,
+        #[serde(default)]
+        driver: Option<String>,
+        range: Option<ScanRange>,
     },
-    /// 枚举本机串口
-    GetSerialPorts,
+    /// 枚举某种传输的可发现目标（串口列表等）
+    GetTransportTargets {
+        transport: TransportKind,
+    },
     /// 已安装设备包清单
     GetPackages,
     /// 新增/更新通道
     UpsertChannel {
-        config: SerialChannelConfig,
+        config: ChannelConfig,
     },
     RemoveChannel {
         channel: String,
@@ -130,9 +139,12 @@ pub enum ClientMsg {
     rename_all_fields = "camelCase"
 )]
 pub enum ServerMsg {
-    /// 握手应答
+    /// 握手应答：宿主版本 + 能力（UI 据此显示传输/驱动选项）
     Welcome {
         host_version: String,
+        api_version: u32,
+        transports: Vec<TransportKind>,
+        drivers: Vec<DriverInfoDto>,
     },
     Snapshot(SnapshotData),
     /// tag 增量批量
@@ -153,15 +165,16 @@ pub enum ServerMsg {
     /// 扫描进度
     ScanProgress {
         channel: String,
-        slave: u8,
+        address: DeviceAddress,
         found: bool,
     },
     ScanDone {
         channel: String,
-        found: Vec<u8>,
+        found: Vec<DeviceAddress>,
     },
-    SerialPorts {
-        ports: Vec<SerialPortDto>,
+    TransportTargets {
+        transport: TransportKind,
+        targets: Vec<TransportTarget>,
     },
     Packages {
         packages: Vec<PackageDto>,
@@ -205,34 +218,24 @@ pub struct SnapshotData {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelDto {
-    pub id: String,
-    pub name: String,
-    pub port: String,
+    #[serde(flatten)]
+    pub config: ChannelConfig,
     /// running / recovering / faulted / stopped
     pub state: String,
-    /// 以下为完整串口参数，供配置页回填（编辑通道不必再猜端口设置）
-    pub hw_id: Option<String>,
-    pub baud_rate: u32,
-    pub data_bits: u8,
-    pub parity: Parity,
-    pub stop_bits: u8,
-    pub resp_timeout_ms: u32,
-    pub retries: u32,
-    pub inter_frame_gap_ms: u64,
+    /// 传输未注册/配置错误等（None = 正常）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceDto {
-    pub id: String,
-    pub name: String,
-    pub channel_id: String,
-    pub package: String,
-    pub slave: u8,
+    #[serde(flatten)]
+    pub config: DeviceConfig,
     pub online: bool,
-    /// 实例级点表覆盖（scale/offset/pollGroup 等），供设置页回填
-    #[serde(default)]
-    pub overrides: serde_json::Map<String, serde_json::Value>,
+    /// 驱动缺失/编译失败等配置错误（None = 正常）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -242,7 +245,7 @@ pub struct PackageDto {
     pub name: String,
     pub vendor: String,
     pub version: String,
-    pub driver: String,
+    pub protocol: ProtocolDecl,
     #[serde(default)]
     pub description: String,
     /// 设备包声明的默认工作区页面（空 = 宿主 fallback 四页）
@@ -250,6 +253,15 @@ pub struct PackageDto {
     pub ui: PackageUiDto,
     /// 点位定义，供 UI 做点表展示、写值入口与 tag 名映射
     pub points: Vec<PointDto>,
+}
+
+/// 驱动能力（Welcome 下发，UI 据此过滤设备包与表单）。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DriverInfoDto {
+    pub id: String,
+    pub name: String,
+    pub transports: Vec<TransportKind>,
 }
 
 /// 设备包 UI 声明。
@@ -439,16 +451,21 @@ pub struct WorkspaceDto {
 pub struct PointDto {
     pub id: String,
     pub name: String,
-    /// 工程记法地址（如 "40101" / "HR:100"）
-    pub register: String,
-    /// 数据区（位区点位写值走布尔线圈语义）
-    pub area: RegArea,
+    /// 协议地址：寄存器字符串或驱动私有对象
+    pub address: PointAddress,
+    /// 寄存器类协议的显示区（非寄存器协议为 None）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<RegArea>,
     #[serde(rename = "type")]
     pub data_type: DataType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub byte_order: Option<hmi_domain::codec::ByteOrder>,
     pub access: Access,
     pub scale: Option<f64>,
     pub offset: Option<f64>,
     pub unit: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poll_group: Option<String>,
     /// 状态字位展开定义（位号升序；JSON 用数组，避免整数 map key 的反序列化坑）
     #[serde(default)]
     pub bits: Vec<BitDto>,
@@ -483,14 +500,6 @@ pub struct BitDto {
     pub on: Option<String>,
     /// 复位文案（缺省 "0"）
     pub off: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SerialPortDto {
-    pub port_name: String,
-    pub hw_id: Option<String>,
-    pub description: String,
 }
 
 // —— 仪表盘（工程布局，存 gatewayd；UI 可重装）——
@@ -802,18 +811,24 @@ mod tests {
     fn snapshot_with_bit_points_roundtrip() {
         let snap = SnapshotData {
             channels: vec![ChannelDto {
-                id: "ch1".into(),
-                name: "总线".into(),
-                port: "COM3".into(),
+                config: ChannelConfig {
+                    id: "ch1".into(),
+                    name: "总线".into(),
+                    timing: hmi_domain::config::ChannelTiming::default(),
+                    transport: hmi_domain::config::TransportConfig::Serial(
+                        hmi_domain::config::SerialParams {
+                            port: "COM3".into(),
+                            hw_id: None,
+                            baud_rate: 9600,
+                            data_bits: 8,
+                            parity: hmi_domain::config::Parity::None,
+                            stop_bits: 1,
+                            inter_frame_gap_ms: 5,
+                        },
+                    ),
+                },
                 state: "running".into(),
-                hw_id: None,
-                baud_rate: 9600,
-                data_bits: 8,
-                parity: Parity::None,
-                stop_bits: 1,
-                resp_timeout_ms: 200,
-                retries: 2,
-                inter_frame_gap_ms: 5,
+                config_error: None,
             }],
             devices: vec![],
             packages: vec![PackageDto {
@@ -821,19 +836,25 @@ mod tests {
                 name: "PM3000".into(),
                 vendor: "ACME".into(),
                 version: "1.2.0".into(),
-                driver: "modbus-rtu".into(),
+                protocol: ProtocolDecl {
+                    driver: "modbus".into(),
+                    transports: vec![TransportKind::Serial, TransportKind::Tcp],
+                    params: serde_json::json!({ "byteOrder": "abcd" }),
+                },
                 description: String::new(),
                 ui: PackageUiDto::default(),
                 points: vec![PointDto {
                     id: "status".into(),
                     name: "状态字".into(),
-                    register: "40300".into(),
-                    area: RegArea::Holding,
+                    address: PointAddress::Register("40300".parse().unwrap()),
+                    area: Some(RegArea::Holding),
                     data_type: DataType::U16,
+                    byte_order: None,
                     access: Access::R,
                     scale: None,
                     offset: None,
                     unit: String::new(),
+                    poll_group: None,
                     bits: vec![BitDto {
                         bit: 0,
                         name: "运行".into(),
@@ -851,6 +872,9 @@ mod tests {
         let msg = ServerMsg::Snapshot(snap);
         let j = serde_json::to_string(&msg).unwrap();
         assert!(j.contains(r#""bits":[{"bit":0"#), "{j}");
+        assert!(j.contains(r#""id":"ch1""#), "{j}");
+        assert!(j.contains(r#""transport":"serial""#), "{j}");
+        assert!(j.contains(r#""state":"running""#), "{j}");
         let back: ServerMsg = serde_json::from_str(&j).unwrap();
         assert_eq!(msg, back);
     }
@@ -889,7 +913,11 @@ mod tests {
             name: "PM3000".into(),
             vendor: "ACME".into(),
             version: "1.2.0".into(),
-            driver: "modbus-rtu".into(),
+            protocol: ProtocolDecl {
+                driver: "modbus".into(),
+                transports: vec![TransportKind::Serial],
+                params: serde_json::json!({}),
+            },
             description: String::new(),
             ui: PackageUiDto {
                 pages: vec![],
