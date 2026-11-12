@@ -96,6 +96,35 @@ export interface PackageDto {
 
 export interface PackageUiDto {
   pages: DevicePageDto[]
+  /** 包自带的 ESM 小组件（P3） */
+  widgets?: PackageWidgetDto[]
+}
+
+/** 组件槽位声明（宿主据此生成绑定编辑器/校验写权限）。 */
+export interface WidgetBindingDto {
+  type: string
+  many?: boolean
+  write?: boolean
+  required?: boolean
+}
+
+export interface WidgetSizeDto {
+  w: number
+  h: number
+  minW: number
+  minH: number
+}
+
+/** 设备包自带的 ESM 小组件；kind = `<包id>:<id>`。 */
+export interface PackageWidgetDto {
+  id: string
+  title: string
+  description: string
+  entry: string
+  size: WidgetSizeDto
+  bindings: Record<string, WidgetBindingDto>
+  config: Record<string, unknown> | null
+  permissions: string[]
 }
 
 /** 设备工作区的一页：由宿主组件按顺序组合。 */
@@ -113,6 +142,9 @@ export interface BindingDecl {
   tag?: string | null
 }
 
+/** 槽位绑定：单绑定或绑定数组（many 槽位）。 */
+export type BindingSpec = BindingDecl | BindingDecl[]
+
 /** 12 列网格位置（0 基，单位 = 格）。 */
 export interface WidgetRect {
   x: number
@@ -122,11 +154,13 @@ export interface WidgetRect {
 }
 
 export interface DevicePageComponentDto {
-  /** overview / dashboard / tags / settings / core:value / core:gauge / core:switch / core:input / core:bits */
+  /** v2 组件实例 id（v1 组件缺省） */
+  id?: string | null
+  /** 核心组件 / `plugin:<插件id>:<组件id>` / `<包id>:<组件短名>` */
   kind: string
   title: string
   /** 槽位 → 绑定；包内页面用相对点，用户页面可用绝对 tag */
-  bind?: Record<string, BindingDecl>
+  bind?: Record<string, BindingSpec>
   /** 网格位置；整页要么全有、要么全无（流式） */
   rect?: WidgetRect | null
   config: Record<string, unknown> | null
@@ -263,6 +297,14 @@ export type ClientMsg =
   | { type: 'getWorkspaces' }
   | { type: 'saveWorkspace'; workspace: WorkspaceDto }
   | { type: 'removeWorkspace'; deviceType: string }
+  | { type: 'validatePackage'; manifest: Record<string, unknown>; points: Record<string, unknown> }
+  | { type: 'installDraftPackage'; manifest: Record<string, unknown>; points: Record<string, unknown> }
+  | {
+      type: 'exportPackage'
+      manifest: Record<string, unknown>
+      points: Record<string, unknown>
+      dir: string
+    }
 
 export type ServerMsg =
   | { type: 'welcome'; hostVersion: string }
@@ -277,6 +319,7 @@ export type ServerMsg =
   | { type: 'dashboards'; dashboards: DashboardDto[] }
   | { type: 'uiPlugins'; plugins: UiPluginDto[] }
   | { type: 'workspaces'; workspaces: WorkspaceDto[] }
+  | { type: 'packageValidation'; errors: string[]; warnings: string[] }
   | { type: 'commandOk'; kind: string }
   | { type: 'error'; message: string }
 

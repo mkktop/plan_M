@@ -53,10 +53,21 @@ pub fn load_package_dir(dir: &Path) -> Result<LoadedPackage, PackageError> {
         return Err(PackageError::MissingFile("points.json".into()));
     }
 
-    let manifest: PackageManifest = parse_json_file(&manifest_path)?;
+    let mut manifest: PackageManifest = parse_json_file(&manifest_path)?;
+    // v2 页面 / 包内组件短名归一化（安装校验与运行时 DTO 共用同一形态）
+    manifest.ui.normalize(&manifest.id);
     let points: PointsTable = parse_json_file(&points_path)?;
 
-    let issues = validate_package(&manifest, &points);
+    let mut issues = validate_package(&manifest, &points);
+    // 组件入口文件存在性（校验函数拿不到目录，这里补）
+    for w in &manifest.ui.widgets {
+        if !dir.join(&w.entry).is_file() {
+            issues.errors.push(format!(
+                "ui.widgets `{}`：entry 文件不存在：{}",
+                w.id, w.entry
+            ));
+        }
+    }
     if !issues.ok() {
         return Err(PackageError::Invalid(issues.errors.join("\n  - ")));
     }

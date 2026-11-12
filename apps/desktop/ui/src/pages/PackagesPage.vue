@@ -6,6 +6,7 @@ import AppIcon from '@/components/AppIcon.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import ModalShell from '@/components/ModalShell.vue'
 import PageHeader from '@/components/PageHeader.vue'
+import PackageStudio from '@/components/PackageStudio.vue'
 import { isTauriRuntime } from '@/api/ws'
 import { useConnectionStore } from '@/stores/connection'
 import { useProjectStore } from '@/stores/project'
@@ -25,6 +26,15 @@ const importError = ref('')
 const dragOver = ref(false)
 const removing = ref(false)
 const removeBusy = ref(false)
+const studioOpen = ref(false)
+
+/** 包编辑器安装完成：选中新包；「安装并添加设备」直接去设备页。 */
+function onStudioInstalled(packageId: string, addDevice: boolean): void {
+  selectedId.value = packageId
+  if (addDevice) {
+    void router.push({ path: '/devices', query: { add: '1', package: packageId } })
+  }
+}
 
 const selected = computed<PackageDto | null>(() => {
   if (!project.packages.length) return null
@@ -185,11 +195,15 @@ onBeforeUnmount(() => {
 <template>
   <div class="page">
     <PageHeader title="设备包" subtitle="声明式设备型号：manifest + 点表；导入即注册，实例共用一份点表">
+      <n-button size="small" type="primary" @click="studioOpen = true">
+        <template #icon><AppIcon name="plus" :size="15" /></template>
+        新建设备包
+      </n-button>
       <n-button size="small" @click="openImport">
         <template #icon><AppIcon name="download" :size="15" /></template>
         导入设备包
       </n-button>
-      <n-button size="small" type="primary" :disabled="!selected" @click="gotoAddDevice">
+      <n-button size="small" :disabled="!selected" @click="gotoAddDevice">
         <template #icon><AppIcon name="plus" :size="15" /></template>
         用此包添加设备
       </n-button>
@@ -415,5 +429,8 @@ onBeforeUnmount(() => {
         </n-button>
       </template>
     </ModalShell>
+
+    <!-- 包编辑器：全程表单建包（P4） -->
+    <PackageStudio v-if="studioOpen" @close="studioOpen = false" @installed="onStudioInstalled" />
   </div>
 </template>

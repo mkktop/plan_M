@@ -1,15 +1,26 @@
 # 组件协议 v2（Widget Protocol）
 
-> 状态：P1、P2 已实施（2026-11-12）。目标是让「设备页面 = 小组件排列」成为宿主唯一模型。
+> 状态：P1–P4 已实施（2026-11-12）。目标是让「设备页面 = 小组件排列」成为宿主唯一模型。
 > 本协议允许打破现有 `components[{kind,title,config}]` 结构；旧包通过兼容层继续可用。
 >
-> 落地进度：P1 已完成（点表写元数据 / `core:value`+`core:gauge` 进设备页 /
-> `config` 透传 / 相对绑定）；P2 已完成（`core:switch`/`input`/`bits`、12 列 `rect`
-> 网格、可见性订阅）。
+> 落地进度：P1（点表写元数据 / `core:value`+`core:gauge` / `config` 透传 / 相对绑定）；
+> P2（`core:switch`/`input`/`bits`、12 列 `rect` 网格、可见性订阅）；
+> P3（插件与设备包 ESM 组件进设备页、`/packages` 静态路由、权限门面）；
+> P4（包编辑器、`core:group` 声明式组合、`schemaVersion: 2` 页面、预设组合页）。
 >
-> **实现取舍**：P2 没有引入独立的 `widgets[]` 数组，而是在 v1 `components[]` 上增量加
-> 可选 `rect`，一条列表同时服务流式与网格布局。这样旧包/旧用户页面零迁移；
-> `schemaVersion: 2` 的 `widgets[]` 结构留到 P4 包编辑器一起切换（读取时翻译）。
+> **实现取舍**（与协议文本的差异，均已在代码中落地）：
+>
+> 1. **内存仍以 `components[]` 为渲染模型**：v2 页面（`schemaVersion: 2` + `widgets[]`）
+>    在读取时翻译成 `components[]`（保留实例 `id`）。DTO/工作区也下发 `components[]`，
+>    因此旧用户页面零迁移；导出包时保留作者写的原始 v2 JSON 形态。
+> 2. **槽位 `many` 用数组**：`bind` 的值可以是单个声明或声明数组
+>    （`"series": [{point:"uab"}, {point:"ia"}]`），Rust/TS 两端都接受。
+> 3. **ESM 模块契约**：优先 `mountWidget(host)`；只有 `mount` 且形参 ≤1 时按 v2 host 调用；
+>    `mount(el, ctx, props)`（形参 ≥2）走 v1 插件兼容路径（light DOM，样式全局）。
+> 4. **静态路由只暴露声明目录**：`/packages/<id>/<version>/<path>` 只允许
+>    `ui.widgets[].entry` 本身及其所在目录下的文件，其余一律 404。
+> 5. **`$` 系统 tag 尚未进入槽位**：`$device/$channel/$host` 命名空间留在后续阶段，
+>    当前 `PointMeta` 只解析设备点与位。
 
 ## 1. 目标与不变量
 
@@ -259,9 +270,8 @@ import(entry) → 缓存模块 → new ShadowRoot → mount(host)
 - `rect` 用 12 列绝对格（与仪表盘一致），`y` 单值；宿主行高 72px、间距 12px。
 - 缺 `rect` 时按数组顺序流式排布（迁移旧包用）。
 - 窄屏（<900px）宿主强制 `w = 12` 重排，不写回数据。
-- **P2 已实现**：`components[{kind,title,bind,rect,config}]` 上直接支持 `rect`；
-  整页必须全部声明或全部省略，安装/保存时校验越界与重叠。`widgets[]` 独立数组
-  在 P4 切换（见文首“实现取舍”）。
+- **P4 已实现**：`schemaVersion: 2` 页面读取时翻译为内存 `components[]`（保留实例 `id`）；
+  安装/保存与 v1 共用同一套 rect/绑定校验。包导出仍保留作者写的 v2 `widgets[]` 形态。
 
 ### 5.2 页面归属
 
@@ -285,9 +295,9 @@ import(entry) → 缓存模块 → new ShadowRoot → mount(host)
 | UI 插件 | 插件 `manifest.json` | ESM | 美化、专业展示、跨设备页面 |
 | 设备包 | 设备包 `manifest.json` | ESM（可选） | 型号专属展示（如三相矢量图） |
 
-- **设备包允许 ESM 组件**：包本来就是工程师安装的可信包，信任级别等同插件；协议、权限、生命周期完全一致。静态资源路由：`/packages/<id>/<version>/widgets/<entry>`（仅暴露清单声明的 entry，阻止路径穿越）。
-- **声明式组合（无代码）作为子集支持**：`kind: "core:group"` 组件可以把若干子组件按 rect 组合，供不想写代码的包作者使用。
-- 模块缓存键：`(provider, kind, version)`；包升级自动失效。
+- **设备包允许 ESM 组件**：包本来就是工程师安装的可信包，信任级别等同插件；协议、权限、生命周期完全一致。静态资源路由：`/packages/<id>/<version>/<entry 目录>`（仅暴露清单声明 entry 所在目录，阻止路径穿越）。**P3 已实现**。
+- **声明式组合（无代码）作为子集支持**：`kind: "core:group"` 组件可以把若干子组件按 rect 组合，供不想写代码的包作者使用。**P4 已实现**（组内 12 列小网格，允许嵌套一层）。
+- 模块缓存键：`(provider, kind, version)`；包升级自动失效（URL 带版本查询串）。
 
 ## 7. 效率规则（硬性）
 
@@ -333,8 +343,8 @@ import(entry) → 缓存模块 → new ShadowRoot → mount(host)
 |---|---|---|
 | P1 ✅ | 点表写元数据（min/max/step/enum）+ `core:value`/`core:gauge` 进设备页 + `config` 透传 + 相对绑定 | 手写一个包，设备页出现小组件拼的页面（`examples/packages/pm3000` 的「运行监测」页即验收样例） |
 | P2 ✅ | 内置组件表 + `core:switch`/`core:input`/`core:bits` + 页面渲染器（rect/流式）+ 可见性订阅 | 8 组件网格页（值/仪表/开关/输入/位表）在演示网关上完成写入回读 |
-| P3 | 插件 widget 进设备页（同一 host）+ 设备包 ESM 组件 + 静态路由 + 权限 | 示例包自带一个趋势组件 |
-| P4 | 包编辑器（建包/填点表/预览/导出）+ overview/tags/settings 改写成预设组合 | 全程不写 JSON 建出一个型号 |
+| P3 ✅ | 插件 widget 进设备页（同一 host）+ 设备包 ESM 组件 + 静态路由 + 权限 | 示例包自带一个趋势组件（pm3000「趋势」页） |
+| P4 ✅ | 包编辑器（建包/填点表/预览/导出）+ overview/tags/settings 改写成预设组合 + v2 `widgets[]` | 全程不写 JSON 建出一个型号（编辑器演示包 → 设备页实时数据） |
 
 P1 不动 gatewayd 采集侧（只加 DTO 字段与校验），是风险最低的切入点。
 
@@ -363,3 +373,40 @@ P1 不动 gatewayd 采集侧（只加 DTO 字段与校验），是风险最低�
   卸载即退订。
 - 页面编辑器：网格/流式一键切换、x/y/w/h 编辑、保存前校验重叠与越界。
 - 示例页：8 组件 4×2 网格（值/仪表/位值/数值输入/枚举输入/开关/位表）。
+
+### P3 落地清单（2026-11-12）
+
+- **组件清单**：设备包 `ui.widgets[]`（id/title/entry/size/bindings/config/permissions）；
+  全局 kind 为 `<包id>:<短名>`，页面里可写短名（读取时归一化）。安装校验 id/entry/权限/尺寸，
+  并要求 entry 文件真实存在。
+- **静态服务**：`GET /packages/<id>/<version>/<path>`，只暴露声明 entry 所在目录；
+  版本必须等于已安装版本；CORS + `no-cache`。
+- **运行时宿主**（`plugins/widgetHost.ts`）：
+  - v2：ShadowRoot + `:host` 基础样式 + `--pm-color-*` 主题变量；
+    `slots.sub/read/meta/write`、`theme.token`、`notify`、`log`；
+  - 可见性门控（200px 预取）与 tag 引用计数；写位走“读父点整字 → 改位 → 写回”；
+  - 权限门面：`tags:read`（兼容 `tags:subscribe`）/ `tags:write` / `notify`；
+  - v1 插件兼容：`mount(el, ctx, props)` 在 light DOM 挂载，`ctx.tags` 被限制在该组件
+    bind 声明的 tag 集合内。
+- **设备页编辑器**：组件下拉合并核心组件、当前包的 ESM 组件与已加载插件组件；
+  `bind` 支持单声明或数组（多点槽位）。
+- **示例**：`pm3000/widgets/trend.js`（多点趋势，无依赖 ESM）；「趋势」页 v2 `widgets[]`。
+  演示网关会把 `widgets/` 一并种入临时安装目录。
+
+### P4 落地清单（2026-11-12）
+
+- **v2 页面**：`schemaVersion: 2` + `layout` + `widgets[{id,kind,rect,bind,config}]`；
+  读取时翻译为 `components[]`；安装/保存校验实例 id 重复、混用 v1/v2 写法、组合嵌套。
+- **包编辑器**（设备包页「新建设备包」）：基本信息 / 点表 / 页面 / 预览与导出四步：
+  - 点表：轮询组、点位、scale/offset/unit、min/max/step、bits（位号/文案）、enum；
+  - 页面：`core:value/gauge/switch/input/bits/group` 组合、结构化绑定点/位、rect；
+  - 「按点表生成预设页面」：概览（数值卡+状态位）/ 参数（输入）/ 状态位 / 实时点表 / 设备设置；
+  - 校验调用 gatewayd `validatePackage`（与安装同规则），errors 非空禁止安装/导出；
+  - 安装走 `installDraftPackage`（临时目录 → 正式安装流）；导出走 `exportPackage`
+    （只写 manifest.json + points.json，保留 v2 原始形态）；草稿自动存 localStorage。
+- **`core:group`**：`config.items[]` 子组件声明（kind/title/rect/bind/config），
+  组内 12 列小网格；安装校验子组件 kind/rect/绑定，禁止直接嵌套自身。
+- **预设组合兜底**：设备包未声明页面且有点表时，宿主按点表生成组合页
+  （概览/参数/状态位 + `core:tags`/`core:settings` 复合组件）；无点表仍回落到原四页。
+- **复合组件别名**：`core:overview` / `core:dashboard` / `core:tags` / `core:settings`
+  与裸名等价；`core:group` 为新增声明式组件。

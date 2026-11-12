@@ -54,6 +54,10 @@ async fn seed_demo(service: &Arc<GatewayService>) -> anyhow::Result<()> {
         env!("CARGO_MANIFEST_DIR"),
         "/../../examples/packages/pm3000/points.json"
     ));
+    const TREND_WIDGET: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/packages/pm3000/widgets/trend.js"
+    ));
 
     let already = service.packages().await;
     if !already.iter().any(|p| p.id == "com.acme.pm3000") {
@@ -68,6 +72,8 @@ async fn seed_demo(service: &Arc<GatewayService>) -> anyhow::Result<()> {
         std::fs::create_dir_all(&seed_dir)?;
         std::fs::write(seed_dir.join("manifest.json"), MANIFEST)?;
         std::fs::write(seed_dir.join("points.json"), POINTS)?;
+        std::fs::create_dir_all(seed_dir.join("widgets"))?;
+        std::fs::write(seed_dir.join("widgets").join("trend.js"), TREND_WIDGET)?;
         let r = service.import_package(seed_dir.to_str().unwrap()).await;
         let _ = std::fs::remove_dir_all(&seed_dir);
         match r {
@@ -116,6 +122,8 @@ pub fn build_router(state: SharedState) -> Router {
         // UI 插件：清单 + ESM/资源静态服务（webview 直接动态 import）。
         .route("/plugins", get(ui_plugin_list))
         .route("/plugins/{id}/{*path}", get(ui_plugin_asset))
+        // 设备包 ESM 组件：只暴露清单声明 entry 所在目录下的文件。
+        .route("/packages/{id}/{version}/{*path}", get(package_asset))
         .with_state(state)
 }
 
@@ -212,6 +220,44 @@ fn plugin_error(status: StatusCode, message: &'static str) -> Response {
             HeaderValue::from_static("*"),
         )],
         (status, message),
+    )
+        .into_response()
+}
+
+/// 设备包 ESM 组件资源：`/packages/<id>/<version>/<entry 或同目录文件>`。
+///
+/// 与服务层共用同一套越界/声明校验；未声明的路径一律 404（不暴露包内其他文件）。
+async fn package_asset(
+    Path((id, version, relative)): Path<(String, String, String)>,
+    State(state): State<SharedState>,
+) -> Response {
+    let Some(file) = state
+        .service
+        .package_widget_asset(&id, &version, &relative)
+        .await
+    else {
+        return plugin_error(StatusCode::NOT_FOUND, "设备包组件资源不存在或未声明");
+    };
+    let data = match tokio::fs::read(&file).await {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!(file = %file.display(), error = %e, "读取设备包组件资源失败");
+            return plugin_error(StatusCode::INTERNAL_SERVER_ERROR, "读取设备包组件资源失败");
+        }
+    };
+    (
+        [
+            (
+                header::ACCESS_CONTROL_ALLOW_ORIGIN,
+                HeaderValue::from_static("*"),
+            ),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-cache")),
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static(mime_of(&file)),
+            ),
+        ],
+        data,
     )
         .into_response()
 }
@@ -513,6 +559,31 @@ impl Session {
                     Err(e) => Ok(Some(ServerMsg::Error { message: e })),
                 }
             }
+            ClientMsg::ValidatePackage { manifest, points } => {
+                match svc.validate_package_draft(&manifest, &points) {
+                    Ok(issues) => Ok(Some(ServerMsg::PackageValidation {
+                        errors: issues.errors,
+                        warnings: issues.warnings,
+                    })),
+                    Err(e) => Ok(Some(ServerMsg::Error { message: e })),
+                }
+            }
+            ClientMsg::InstallDraftPackage { manifest, points } => {
+                match svc.install_draft_package(&manifest, &points).await {
+                    Ok(_) => Ok(Some(ServerMsg::Snapshot(svc.snapshot().await))),
+                    Err(e) => Ok(Some(ServerMsg::Error { message: e })),
+                }
+            }
+            ClientMsg::ExportPackage {
+                manifest,
+                points,
+                dir,
+            } => match svc.export_package_draft(&manifest, &points, &dir) {
+                Ok(()) => Ok(Some(ServerMsg::CommandOk {
+                    kind: "exportPackage".into(),
+                })),
+                Err(e) => Ok(Some(ServerMsg::Error { message: e })),
+            },
         }
     }
 

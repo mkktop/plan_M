@@ -11,13 +11,22 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NButton, NInputNumber, NSelect } from 'naive-ui'
 import AppIcon from '@/components/AppIcon.vue'
 import QualityPill from '@/components/QualityPill.vue'
+import ExternalWidgetMount from '@/components/device/ExternalWidgetMount.vue'
+import GroupBody from '@/components/device/GroupBody.vue'
 import { gateway } from '@/api/ws'
 import { useProjectStore } from '@/stores/project'
 import { useTagsStore } from '@/stores/tags'
 import { errorMessage, useToastStore } from '@/stores/toast'
-import { normalizeComponentKind, resolveBoundTag, slotBind } from '@/utils/devicePages'
+import { resolveExternalWidget } from '@/plugins/deviceWidgets'
+import {
+  isExternalWidgetKind,
+  normalizeComponentKind,
+  resolveBoundTag,
+  slotBind,
+} from '@/utils/devicePages'
 import { boolOf, formatNumber, primitiveOf, qualityClass, valueText } from '@/utils/format'
 import type {
+  BindingDecl,
   BitDto,
   DevicePageComponentDto,
   PointDto,
@@ -36,6 +45,30 @@ const toast = useToastStore()
 const kind = computed(() => normalizeComponentKind(props.component.kind))
 const config = computed<Record<string, unknown>>(() => props.component.config ?? {})
 const binding = computed(() => slotBind(props.component.bind, 'value'))
+/** 核心小组件只认 value 槽位的第一个声明（多点槽位由外部组件宿主处理）。 */
+const bindingDecl = computed<BindingDecl | undefined>(() => {
+  const b = binding.value
+  return Array.isArray(b) ? b[0] : (b ?? undefined)
+})
+
+/** 当前设备对应的设备包（外部组件的点表元数据也按它解析）。 */
+const pkg = computed(() => {
+  const device = project.devices.find((d) => d.id === props.deviceId)
+  return device ? (project.packageById.get(device.package) ?? null) : null
+})
+
+/** 插件 / 设备包 ESM 组件：交给统一宿主挂载。 */
+const external = computed(() =>
+  isExternalWidgetKind(props.component.kind)
+    ? resolveExternalWidget(props.component.kind, pkg.value)
+    : null,
+)
+const externalMissing = computed(
+  () => isExternalWidgetKind(props.component.kind) && !external.value,
+)
+const externalMeta = computed(() =>
+  external.value ? `${external.value.providerName} · ${external.value.kind}` : '',
+)
 
 function cfgNumber(key: string, fallback: number): number {
   const v = config.value[key]
@@ -50,7 +83,7 @@ function cfgString(key: string, fallback: string): string {
 // —— 绑定解析 ——
 
 const tag = computed(() => resolveBoundTag(props.deviceId, binding.value))
-const bitBound = computed(() => typeof binding.value?.bit === 'number')
+const bitBound = computed(() => typeof bindingDecl.value?.bit === 'number')
 /** 位绑定写值要写父点（gateway 的位子 tag 只读）。 */
 const parentTag = computed(() => tag.value.replace(/\.b\d+$/, ''))
 
@@ -86,6 +119,8 @@ const quality = computed(() => change.value?.quality)
 const displayTitle = computed(() => {
   const own = props.component.title.trim()
   if (own) return own
+  if (external.value) return external.value.title
+  if (externalMissing.value) return '未知组件'
   if (!tag.value) return '未绑定组件'
   const r = resolved.value
   if (!r) return tag.value
@@ -131,6 +166,8 @@ const gaugePct = computed(() => {
 })
 
 const metaText = computed(() => {
+  if (external.value) return externalMeta.value
+  if (externalMissing.value) return '组件来源未安装或已移除'
   if (!tag.value) return props.component.title || '在页面编辑里填写 bind.value'
   const r = resolved.value
   if (!r) return '点不在当前点表中'
@@ -175,7 +212,7 @@ const switchOn = computed(() => {
   if (!bitBound.value) return boolOf(change.value?.value) ?? false
   const num = primitiveOf(change.value?.value)
   if (typeof num !== 'number') return false
-  return ((num >> (binding.value?.bit ?? 0)) & 1) === 1
+  return ((num >> (bindingDecl.value?.bit ?? 0)) & 1) === 1
 })
 
 const switchOnLabel = computed(() => {
@@ -224,7 +261,7 @@ async function toggleSwitch(): Promise<void> {
       toast.error('该点带 scale/offset 换算，位写入请直接写父点')
       return
     }
-    const bit = binding.value?.bit ?? 0
+    const bit = bindingDecl.value?.bit ?? 0
     const next = on ? num & ~(1 << bit) : num | (1 << bit)
     await writeTag(parentTag.value, numericTagValue(r.point, next), `已写入 ${displayTitle.value}`)
     return
@@ -328,6 +365,8 @@ const visible = ref(true)
 let io: IntersectionObserver | null = null
 
 const tagsToWatch = computed<string[]>(() => {
+  // 外部组件自己通过 host.slots 订阅，这里不重复订阅。
+  if (external.value || externalMissing.value) return []
   if (kind.value === 'core:bits') {
     const r = resolved.value
     if (!r || r.bit) return []
@@ -371,14 +410,30 @@ onBeforeUnmount(() => {
   <article
     ref="rootEl"
     class="dev-widget"
-    :class="[`kind-${kind.replace(':', '-')}`, { unbound: !tag }]"
+    :class="[
+      `kind-${kind.replace(':', '-')}`,
+      { unbound: !tag && !external && !externalMissing, external: Boolean(external) },
+    ]"
   >
     <header class="dev-widget-head">
       <span class="dev-widget-title" :title="displayTitle">{{ displayTitle }}</span>
       <span class="dev-widget-meta" :title="metaText">{{ metaText }}</span>
     </header>
 
-    <div v-if="!tag" class="dev-widget-empty">
+    <ExternalWidgetMount
+      v-if="external"
+      :descriptor="external"
+      :component="component"
+      :device-id="deviceId"
+      :pkg="pkg"
+    />
+
+    <div v-else-if="externalMissing" class="dev-widget-empty">
+      <AppIcon name="alert" :size="15" />
+      <span>未知组件 <code>{{ component.kind }}</code>（来源未安装或已移除）</span>
+    </div>
+
+    <div v-else-if="!tag && kind !== 'core:group'" class="dev-widget-empty">
       <AppIcon name="alert" :size="15" />
       <span>未绑定数据点</span>
     </div>
@@ -507,6 +562,12 @@ onBeforeUnmount(() => {
             </span>
           </div>
         </div>
+      </div>
+    </template>
+
+    <template v-else-if="kind === 'core:group'">
+      <div class="dev-widget-body dev-group-body">
+        <GroupBody :device-id="deviceId" :component="component" />
       </div>
     </template>
 

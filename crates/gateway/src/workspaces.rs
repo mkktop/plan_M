@@ -161,16 +161,17 @@ pub fn validate_workspace(w: &WorkspaceDto) -> Result<(), String> {
             .iter()
             .map(|c| c.rect.map(|r| (r.x, r.y, r.w, r.h)))
             .collect();
-        for e in hmi_packaging::validate_component_rects(&page.id, &rects) {
+        if let Some(e) = hmi_packaging::validate_component_rects(&page.id, &rects)
+            .into_iter()
+            .next()
+        {
             return Err(e);
         }
         for comp in &page.components {
-            if !ALLOWED_DEVICE_PAGE_COMPONENTS.contains(&comp.kind.as_str()) {
+            if !allowed_component_kind(&comp.kind) {
                 return Err(format!(
-                    "页面 `{}` 使用了未知组件 `{}`（可用：{}）",
-                    page.id,
-                    comp.kind,
-                    ALLOWED_DEVICE_PAGE_COMPONENTS.join(", ")
+                    "页面 `{}` 使用了未知组件 `{}`（核心组件、`plugin:<插件id>:<组件id>` 或 `<包id>:<组件短名>`）",
+                    page.id, comp.kind
                 ));
             }
             if comp.title.chars().count() > MAX_TITLE {
@@ -182,39 +183,72 @@ pub fn validate_workspace(w: &WorkspaceDto) -> Result<(), String> {
                     page.id, comp.kind
                 ));
             }
-            for (slot, b) in &comp.bind {
+            for (slot, spec) in &comp.bind {
                 if slot.trim().is_empty() {
                     return Err(format!(
                         "页面 `{}` 的组件 `{}` 存在空绑定槽位",
                         page.id, comp.kind
                     ));
                 }
-                let has_point = b.point.as_deref().is_some_and(|s| !s.trim().is_empty());
-                let has_tag = b.tag.as_deref().is_some_and(|s| !s.trim().is_empty());
-                if has_point == has_tag {
+                let decls = spec.decls();
+                if decls.is_empty() {
                     return Err(format!(
-                        "页面 `{}` 的组件 `{}` 槽位 `{slot}`：必须且只能声明 point 或 tag 之一",
+                        "页面 `{}` 的组件 `{}` 槽位 `{slot}`：绑定数组为空",
                         page.id, comp.kind
                     ));
                 }
-                if b.bit.is_some() && !has_point {
-                    return Err(format!(
-                        "页面 `{}` 的组件 `{}` 槽位 `{slot}`：bit 只能与 point 组合",
-                        page.id, comp.kind
-                    ));
-                }
-                if has_tag && !valid_tag(b.tag.as_deref().unwrap_or_default()) {
-                    return Err(format!(
-                        "页面 `{}` 的组件 `{}` 槽位 `{slot}`：tag `{}` 非法",
-                        page.id,
-                        comp.kind,
-                        b.tag.as_deref().unwrap_or_default()
-                    ));
+                for b in decls {
+                    let has_point = b.point.as_deref().is_some_and(|s| !s.trim().is_empty());
+                    let has_tag = b.tag.as_deref().is_some_and(|s| !s.trim().is_empty());
+                    if has_point == has_tag {
+                        return Err(format!(
+                            "页面 `{}` 的组件 `{}` 槽位 `{slot}`：必须且只能声明 point 或 tag 之一",
+                            page.id, comp.kind
+                        ));
+                    }
+                    if b.bit.is_some() && !has_point {
+                        return Err(format!(
+                            "页面 `{}` 的组件 `{}` 槽位 `{slot}`：bit 只能与 point 组合",
+                            page.id, comp.kind
+                        ));
+                    }
+                    if has_tag && !valid_tag(b.tag.as_deref().unwrap_or_default()) {
+                        return Err(format!(
+                            "页面 `{}` 的组件 `{}` 槽位 `{slot}`：tag `{}` 非法",
+                            page.id,
+                            comp.kind,
+                            b.tag.as_deref().unwrap_or_default()
+                        ));
+                    }
                 }
             }
         }
     }
     Ok(())
+}
+
+/// 组件 kind 形态校验：核心组件 / `plugin:<插件id>:<组件id>` / `<包id>:<组件短名>`。
+///
+/// 具体插件/包是否存在由宿主渲染时解析（缺组件渲染占位卡，不阻塞页面保存）——
+/// 否则先做页面、后装插件的工作流会被卡住。
+fn allowed_component_kind(kind: &str) -> bool {
+    if ALLOWED_DEVICE_PAGE_COMPONENTS.contains(&kind) {
+        return true;
+    }
+    if let Some(rest) = kind.strip_prefix("core:") {
+        return ALLOWED_DEVICE_PAGE_COMPONENTS.contains(&rest);
+    }
+    if let Some(rest) = kind.strip_prefix("plugin:") {
+        let mut parts = rest.split(':');
+        return matches!(
+            (parts.next(), parts.next(), parts.next()),
+            (Some(a), Some(b), None) if !a.is_empty() && !b.is_empty()
+        );
+    }
+    if let Some((pkg, local)) = kind.split_once(':') {
+        return valid_device_type(pkg) && valid_page_id(local);
+    }
+    false
 }
 
 fn valid_device_type(s: &str) -> bool {
@@ -261,6 +295,7 @@ mod tests {
             title: id.into(),
             icon: "grid".into(),
             components: vec![DevicePageComponentDto {
+                id: None,
                 kind: kind.into(),
                 title: String::new(),
                 bind: Default::default(),
@@ -332,14 +367,15 @@ mod tests {
 
     #[test]
     fn binding_declarations_validated() {
-        use hmi_wire::BindingDeclDto;
+        use hmi_wire::{BindingDeclDto, BindingSpecDto};
 
         let tmp = tempfile::tempdir().unwrap();
         let mut store = WorkspaceStore::load(workspaces_path(tmp.path()));
 
-        let with_bind = |bind: BindingDeclDto| {
+        let with_bind = |bind: BindingSpecDto| {
             let mut w = sample();
             w.pages[0].components[0] = DevicePageComponentDto {
+                id: None,
                 kind: "core:value".into(),
                 title: String::new(),
                 bind: [("value".to_string(), bind)].into_iter().collect(),
@@ -351,46 +387,90 @@ mod tests {
 
         // 用户页面允许相对点与绝对 tag 两种绑定
         assert!(store
-            .upsert(with_bind(BindingDeclDto {
+            .upsert(with_bind(BindingSpecDto::One(BindingDeclDto {
                 point: Some("uab".into()),
                 bit: None,
                 tag: None,
-            }))
+            })))
             .is_ok());
         assert!(store
-            .upsert(with_bind(BindingDeclDto {
+            .upsert(with_bind(BindingSpecDto::One(BindingDeclDto {
                 point: None,
                 bit: None,
                 tag: Some("pm1.uab".into()),
-            }))
+            })))
             .is_ok());
 
+        // 多点槽位：数组里每个声明都校验
+        assert!(store
+            .upsert(with_bind(BindingSpecDto::Many(vec![
+                BindingDeclDto {
+                    point: Some("uab".into()),
+                    bit: None,
+                    tag: None,
+                },
+                BindingDeclDto {
+                    point: Some("ia".into()),
+                    bit: None,
+                    tag: None,
+                },
+            ])))
+            .is_ok());
+        assert!(store
+            .upsert(with_bind(BindingSpecDto::Many(vec![])))
+            .unwrap_err()
+            .contains("数组为空"));
+
         let err = store
-            .upsert(with_bind(BindingDeclDto {
+            .upsert(with_bind(BindingSpecDto::One(BindingDeclDto {
                 point: None,
                 bit: None,
                 tag: Some("pm1".into()),
-            }))
+            })))
             .unwrap_err();
         assert!(err.contains("非法"), "{err}");
 
         let err = store
-            .upsert(with_bind(BindingDeclDto {
+            .upsert(with_bind(BindingSpecDto::One(BindingDeclDto {
                 point: Some("uab".into()),
                 bit: None,
                 tag: Some("pm1.uab".into()),
-            }))
+            })))
             .unwrap_err();
         assert!(err.contains("只能声明"), "{err}");
 
         let err = store
-            .upsert(with_bind(BindingDeclDto {
+            .upsert(with_bind(BindingSpecDto::One(BindingDeclDto {
                 point: None,
                 bit: Some(2),
                 tag: Some("pm1.status.b2".into()),
-            }))
+            })))
             .unwrap_err();
         assert!(err.contains("bit 只能与 point"), "{err}");
+    }
+
+    /// P3：用户页面可以引用插件组件与设备包 ESM 组件（存在性由渲染时解析）。
+    #[test]
+    fn external_component_kinds_accepted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut store = WorkspaceStore::load(workspaces_path(tmp.path()));
+
+        for kind in [
+            "plugin:com.example.meter-card:meter",
+            "com.acme.pm3000:trend",
+            "core:group",
+            "core:overview",
+        ] {
+            let mut w = sample();
+            w.pages[0].components[0].kind = kind.into();
+            assert!(store.upsert(w).is_ok(), "{kind} 应被接受");
+        }
+
+        for kind in ["plugin:nope", "com.acme", "core:unknown", "trend"] {
+            let mut w = sample();
+            w.pages[0].components[0].kind = kind.into();
+            assert!(store.upsert(w).is_err(), "{kind} 应被拒绝");
+        }
     }
 
     #[test]
@@ -401,6 +481,7 @@ mod tests {
         let mut store = WorkspaceStore::load(workspaces_path(tmp.path()));
 
         let comp = |kind: &str, rect: Option<WidgetRectDto>| DevicePageComponentDto {
+            id: None,
             kind: kind.into(),
             title: String::new(),
             bind: Default::default(),

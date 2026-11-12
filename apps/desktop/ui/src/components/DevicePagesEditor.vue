@@ -3,14 +3,12 @@ import { computed, ref } from 'vue'
 import { NButton, NInput, NSelect } from 'naive-ui'
 import AppIcon from '@/components/AppIcon.vue'
 import ModalShell from '@/components/ModalShell.vue'
+import { useProjectStore } from '@/stores/project'
 import { useWorkspacesStore } from '@/stores/workspaces'
 import { errorMessage, useToastStore } from '@/stores/toast'
-import {
-  HOST_DEVICE_COMPONENTS,
-  clonePages,
-  defaultWidgetSize,
-} from '@/utils/devicePages'
-import type { BindingDecl, DevicePageDto, WidgetRect } from '@/api/types'
+import { clonePages, normalizeComponentKind } from '@/utils/devicePages'
+import { deviceWidgetOptions, widgetDefaultSize } from '@/plugins/deviceWidgets'
+import type { BindingDecl, BindingSpec, DevicePageDto, WidgetRect } from '@/api/types'
 
 const props = defineProps<{
   typeId: string
@@ -21,10 +19,14 @@ const props = defineProps<{
 
 const emit = defineEmits<{ (e: 'close'): void; (e: 'saved'): void }>()
 
+const project = useProjectStore()
 const workspaces = useWorkspacesStore()
 const toast = useToastStore()
 
+const pkg = computed(() => project.packageById.get(props.typeId) ?? null)
+
 interface EditorComponent {
+  id?: string | null
   kind: string
   title: string
   bindText: string
@@ -45,7 +47,8 @@ function toEditor(pages: DevicePageDto[]): EditorPage[] {
     title: p.title,
     icon: p.icon || 'grid',
     components: p.components.map((c) => ({
-      kind: c.kind,
+      id: c.id ?? null,
+      kind: normalizeComponentKind(c.kind),
       title: c.title || '',
       bindText: c.bind && Object.keys(c.bind).length ? JSON.stringify(c.bind, null, 2) : '',
       rect: c.rect ? { ...c.rect } : null,
@@ -61,10 +64,12 @@ const confirmReset = ref(false)
 
 const selectedPage = computed(() => draft.value.find((p) => p.id === selectedId.value) ?? null)
 
-const componentOptions = HOST_DEVICE_COMPONENTS.map((c) => ({
-  label: `${c.label} · ${c.kind}`,
-  value: c.kind,
-}))
+const componentOptions = computed(() =>
+  deviceWidgetOptions(pkg.value).map((c) => ({
+    label: c.label,
+    value: c.kind,
+  })),
+)
 
 const iconOptions = [
   'pulse',
@@ -91,7 +96,7 @@ function addPage(): void {
     id: nextPageId(),
     title: `新页面 ${draft.value.length + 1}`,
     icon: 'grid',
-    components: [{ kind: 'overview', title: '', bindText: '', rect: null, configText: '' }],
+    components: [{ kind: 'core:overview', title: '', bindText: '', rect: null, configText: '' }],
   }
   draft.value.push(page)
   selectedId.value = page.id
@@ -120,8 +125,8 @@ function addComponent(): void {
   const page = selectedPage.value
   if (!page) return
   const grid = pageGrid.value
-  const kind = grid ? 'core:value' : 'overview'
-  const size = defaultWidgetSize(kind)
+  const kind = grid ? 'core:value' : 'core:overview'
+  const size = widgetDefaultSize(kind, pkg.value)
   const rect = grid ? { x: 0, y: nextRow(page.components), ...size } : null
   page.components.push({ kind, title: '', bindText: '', rect, configText: '' })
 }
@@ -145,10 +150,19 @@ function setPageLayout(mode: 'grid' | 'flow'): void {
   }
   let y = 0
   page.components.forEach((c) => {
-    const size = defaultWidgetSize(c.kind)
+    const size = widgetDefaultSize(c.kind, pkg.value)
     c.rect = { x: 0, y, ...size }
     y += size.h
   })
+}
+
+function setKind(comp: EditorComponent, kind: string): void {
+  comp.kind = kind
+  if (comp.rect) {
+    const size = widgetDefaultSize(kind, pkg.value)
+    comp.rect.w = size.w
+    comp.rect.h = size.h
+  }
 }
 
 function ensureRect(comp: EditorComponent): WidgetRect {
@@ -199,34 +213,42 @@ function parseConfig(text: string): Record<string, unknown> | null {
   return parseObject(text, '组件配置 config ')
 }
 
-/** 绑定：槽位 → { point, bit } 或 { tag }。 */
-function parseBind(text: string): Record<string, BindingDecl> | null {
+/** 绑定：槽位 → { point, bit } 或 { tag }（也接受声明数组，多点槽位）。 */
+function parseBind(text: string): Record<string, BindingSpec> | null {
   const obj = parseObject(text, '组件绑定 bind ')
   if (!obj) return null
-  const out: Record<string, BindingDecl> = {}
-  for (const [slot, decl] of Object.entries(obj)) {
+  const out: Record<string, BindingSpec> = {}
+  for (const [slot, raw] of Object.entries(obj)) {
     if (!slot.trim()) throw new Error('绑定槽位名不能为空')
-    if (!decl || typeof decl !== 'object' || Array.isArray(decl)) {
-      throw new Error(`槽位 ${slot} 的绑定必须是对象`)
-    }
-    const d = decl as Record<string, unknown>
-    const point = typeof d.point === 'string' ? d.point.trim() : ''
-    const tag = typeof d.tag === 'string' ? d.tag.trim() : ''
-    const bit =
-      typeof d.bit === 'number' && Number.isInteger(d.bit) ? d.bit : undefined
-    if (Boolean(point) === Boolean(tag)) {
-      throw new Error(`槽位 ${slot}：point 与 tag 必须且只能填一个`)
-    }
-    if (bit !== undefined && !point) {
-      throw new Error(`槽位 ${slot}：bit 只能与 point 组合`)
-    }
-    out[slot] = {
-      ...(point ? { point } : {}),
-      ...(bit !== undefined ? { bit } : {}),
-      ...(tag ? { tag } : {}),
+    if (Array.isArray(raw)) {
+      if (!raw.length) throw new Error(`槽位 ${slot} 的绑定数组为空`)
+      out[slot] = raw.map((decl) => parseDecl(slot, decl))
+    } else {
+      out[slot] = parseDecl(slot, raw)
     }
   }
   return out
+}
+
+function parseDecl(slot: string, decl: unknown): BindingDecl {
+  if (!decl || typeof decl !== 'object' || Array.isArray(decl)) {
+    throw new Error(`槽位 ${slot} 的绑定必须是对象`)
+  }
+  const d = decl as Record<string, unknown>
+  const point = typeof d.point === 'string' ? d.point.trim() : ''
+  const tag = typeof d.tag === 'string' ? d.tag.trim() : ''
+  const bit = typeof d.bit === 'number' && Number.isInteger(d.bit) ? d.bit : undefined
+  if (Boolean(point) === Boolean(tag)) {
+    throw new Error(`槽位 ${slot}：point 与 tag 必须且只能填一个`)
+  }
+  if (bit !== undefined && !point) {
+    throw new Error(`槽位 ${slot}：bit 只能与 point 组合`)
+  }
+  return {
+    ...(point ? { point } : {}),
+    ...(bit !== undefined ? { bit } : {}),
+    ...(tag ? { tag } : {}),
+  }
 }
 
 function validateRects(comps: EditorComponent[], pageTitle: string): void {
@@ -263,6 +285,7 @@ function buildPages(): DevicePageDto[] {
       title: p.title.trim(),
       icon: p.icon,
       components: p.components.map((c) => ({
+        ...(c.id ? { id: c.id } : {}),
         kind: c.kind,
         title: c.title.trim(),
         bind: parseBind(c.bindText) ?? undefined,
@@ -386,9 +409,10 @@ async function reset(): Promise<void> {
           >
             <div class="component-row-head">
               <n-select
-                v-model:value="comp.kind"
+                :value="comp.kind"
                 :options="componentOptions"
-                style="width: 210px"
+                style="width: 240px"
+                @update:value="(v: string) => setKind(comp, v)"
               />
               <n-input v-model:value="comp.title" placeholder="组件标题（可空）" />
               <span class="component-row-tools">

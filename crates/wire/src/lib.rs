@@ -103,6 +103,22 @@ pub enum ClientMsg {
     RemoveWorkspace {
         device_type: String,
     },
+    /// 包编辑器：校验草稿（manifest / points 由 UI 表单生成，不落盘）
+    ValidatePackage {
+        manifest: serde_json::Value,
+        points: serde_json::Value,
+    },
+    /// 包编辑器：安装草稿（完整安装流校验后落到 gatewayd 数据目录）
+    InstallDraftPackage {
+        manifest: serde_json::Value,
+        points: serde_json::Value,
+    },
+    /// 包编辑器：导出草稿到本机目录（写 manifest.json + points.json）
+    ExportPackage {
+        manifest: serde_json::Value,
+        points: serde_json::Value,
+        dir: String,
+    },
 }
 
 // —— 服务端 → 客户端 ——
@@ -161,6 +177,11 @@ pub enum ServerMsg {
     /// 设备类型工作区列表（get/save/remove 的统一应答）
     Workspaces {
         workspaces: Vec<WorkspaceDto>,
+    },
+    /// 包草稿校验结果（errors 非空 = 不能安装）
+    PackageValidation {
+        errors: Vec<String>,
+        warnings: Vec<String>,
     },
     /// 命令成功（kind 与请求对应，如 "writeTag"）
     CommandOk {
@@ -237,6 +258,90 @@ pub struct PackageDto {
 pub struct PackageUiDto {
     #[serde(default)]
     pub pages: Vec<DevicePageDto>,
+    /// 设备包自带的 ESM 小组件（P3）；页面里以 `<包id>:<组件id>` 引用。
+    #[serde(default)]
+    pub widgets: Vec<PackageWidgetDto>,
+}
+
+/// 设备包自带的 ESM 小组件声明。
+///
+/// 入口文件由 gatewayd 经 `/packages/<id>/<version>/<entry>` 静态提供，
+/// 只暴露声明 entry 所在目录下的文件。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageWidgetDto {
+    /// 包内短名（全局 kind = `<包id>:<id>`）
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    /// 包目录内的相对路径（必须在 widgets/ 下）
+    pub entry: String,
+    #[serde(default)]
+    pub size: WidgetSizeDto,
+    /// 槽位声明：宿主据此生成绑定编辑器、校验写权限
+    #[serde(default)]
+    pub bindings: BTreeMap<String, WidgetBindingDto>,
+    /// 配置 schema / 默认值（宿主原样透传给组件）
+    #[serde(default)]
+    pub config: serde_json::Value,
+    /// tags:read / tags:write / notify
+    #[serde(default)]
+    pub permissions: Vec<String>,
+}
+
+/// 组件默认尺寸（12 列网格，单位 = 格）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WidgetSizeDto {
+    #[serde(default = "default_widget_w")]
+    pub w: u32,
+    #[serde(default = "default_widget_h")]
+    pub h: u32,
+    #[serde(default = "default_min_widget_w")]
+    pub min_w: u32,
+    #[serde(default = "default_min_widget_h")]
+    pub min_h: u32,
+}
+
+impl Default for WidgetSizeDto {
+    fn default() -> Self {
+        Self {
+            w: default_widget_w(),
+            h: default_widget_h(),
+            min_w: default_min_widget_w(),
+            min_h: default_min_widget_h(),
+        }
+    }
+}
+
+fn default_min_widget_w() -> u32 {
+    2
+}
+
+fn default_min_widget_h() -> u32 {
+    1
+}
+
+/// 组件槽位声明。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WidgetBindingDto {
+    /// point / value / text
+    #[serde(rename = "type", default = "default_binding_type")]
+    pub kind: String,
+    /// 一个槽位可绑定多个点（趋势图等）
+    #[serde(default)]
+    pub many: bool,
+    /// 组件可经 `host.slots.write` 写入该槽位
+    #[serde(default)]
+    pub write: bool,
+    #[serde(default)]
+    pub required: bool,
+}
+
+fn default_binding_type() -> String {
+    "point".into()
 }
 
 /// 设备工作区的一页：由宿主组件按顺序组合。
@@ -254,18 +359,47 @@ pub struct DevicePageDto {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DevicePageComponentDto {
-    /// 宿主组件：overview / dashboard / tags / settings / core:value / core:gauge
+    /// v2 组件实例 id（同页内稳定，便于将来增量更新）；v1 组件为空
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// 宿主组件：overview / dashboard / tags / settings / core:value ... /
+    /// `plugin:<插件id>:<组件id>` / `<包id>:<组件短名>`
     pub kind: String,
     #[serde(default)]
     pub title: String,
-    /// 槽位 → 绑定；包内通常声明相对点（point/bit），用户页面可声明绝对 tag
+    /// 槽位 → 绑定；包内通常声明相对点（point/bit），用户页面可声明绝对 tag。
+    /// 值为单个声明或声明数组（`many: true` 的多点槽位）。
     #[serde(default)]
-    pub bind: BTreeMap<String, BindingDeclDto>,
+    pub bind: BTreeMap<String, BindingSpecDto>,
     /// 12 列网格位置；整页要么全部声明、要么全部省略（流式）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rect: Option<WidgetRectDto>,
     #[serde(default)]
     pub config: serde_json::Value,
+}
+
+/// 一个槽位的绑定规格：单绑定或绑定数组（多点槽位）。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum BindingSpecDto {
+    One(BindingDeclDto),
+    Many(Vec<BindingDeclDto>),
+}
+
+impl Default for BindingSpecDto {
+    fn default() -> Self {
+        Self::One(BindingDeclDto::default())
+    }
+}
+
+impl BindingSpecDto {
+    /// 展开为声明列表（单绑定的临时 Vec 借用不方便，统一返回切片）。
+    pub fn decls(&self) -> &[BindingDeclDto] {
+        match self {
+            Self::One(d) => std::slice::from_ref(d),
+            Self::Many(v) => v,
+        }
+    }
 }
 
 /// 组件网格位置（0 基，单位 = 格）。
@@ -628,6 +762,7 @@ mod tests {
             title: "设备概览".into(),
             icon: "pulse".into(),
             components: vec![DevicePageComponentDto {
+                id: None,
                 kind: "overview".into(),
                 title: String::new(),
                 bind: Default::default(),
@@ -637,6 +772,7 @@ mod tests {
         };
         let pkg = PackageUiDto {
             pages: vec![page.clone()],
+            widgets: vec![],
         };
         let msg = ClientMsg::SaveWorkspace {
             workspace: WorkspaceDto {
@@ -717,5 +853,63 @@ mod tests {
         assert!(j.contains(r#""bits":[{"bit":0"#), "{j}");
         let back: ServerMsg = serde_json::from_str(&j).unwrap();
         assert_eq!(msg, back);
+    }
+
+    /// 槽位绑定既接受单个声明，也接受数组（多点槽位）。
+    #[test]
+    fn binding_spec_accepts_one_or_many() {
+        let one: BindingSpecDto = serde_json::from_str(r#"{ "point": "uab" }"#).unwrap();
+        assert_eq!(one.decls().len(), 1);
+        assert_eq!(one.decls()[0].point.as_deref(), Some("uab"));
+
+        let many: BindingSpecDto =
+            serde_json::from_str(r#"[{ "point": "uab" }, { "point": "ia" }]"#).unwrap();
+        assert_eq!(many.decls().len(), 2);
+        assert_eq!(many.decls()[1].point.as_deref(), Some("ia"));
+
+        let j = serde_json::to_string(&many).unwrap();
+        assert_eq!(j, r#"[{"point":"uab"},{"point":"ia"}]"#);
+    }
+
+    /// P3：设备包 ESM 组件声明随包 DTO 下发（UI 据此注册 kind 与入口 URL）。
+    #[test]
+    fn package_widget_declarations_roundtrip() {
+        let mut bindings = BTreeMap::new();
+        bindings.insert(
+            "series".to_string(),
+            WidgetBindingDto {
+                kind: "point".into(),
+                many: true,
+                write: false,
+                required: true,
+            },
+        );
+        let pkg = PackageDto {
+            id: "com.acme.pm3000".into(),
+            name: "PM3000".into(),
+            vendor: "ACME".into(),
+            version: "1.2.0".into(),
+            driver: "modbus-rtu".into(),
+            description: String::new(),
+            ui: PackageUiDto {
+                pages: vec![],
+                widgets: vec![PackageWidgetDto {
+                    id: "trend".into(),
+                    title: "趋势图".into(),
+                    description: String::new(),
+                    entry: "widgets/trend.js".into(),
+                    size: WidgetSizeDto::default(),
+                    bindings,
+                    config: serde_json::json!({ "windowSec": 60 }),
+                    permissions: vec!["tags:read".into()],
+                }],
+            },
+            points: vec![],
+        };
+        let j = serde_json::to_string(&pkg).unwrap();
+        assert!(j.contains(r#""entry":"widgets/trend.js""#), "{j}");
+        assert!(j.contains(r#""many":true"#), "{j}");
+        let back: PackageDto = serde_json::from_str(&j).unwrap();
+        assert_eq!(back, pkg);
     }
 }

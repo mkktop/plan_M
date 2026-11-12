@@ -32,3 +32,24 @@ export function mount(el, ctx, props) {
 - manifest 权限：`tags:subscribe` / `tags:write` / `notify` / `theme`。
 - 组件 kind：`plugin:com.example.meter-card:meter`，由宿主自动生成，布局只保存 kind/tag/config。
 - 完整类型见 `apps/desktop/ui-plugin-sdk/index.d.ts`。
+
+## 设备页（v1 兼容 + v2 槽位）
+
+同一份组件也会出现在设备页编辑器的组件下拉里（kind 仍是
+`plugin:com.example.meter-card:meter`）。v1 的 `mount(el, ctx, props)` 由宿主自动适配：
+`props.widget.tag` 取组件 `bind.value` 解析后的 tag，`ctx.tags` 被限制在该组件声明的绑定内。
+
+新插件可以导出 v2 入口，直接按槽位取写值（ShadowRoot + 主题变量 + 权限门面）：
+
+```js
+export function mountWidget(host) {
+  const off = host.slots.sub('value', ([s]) => {
+    host.el.textContent = `${s.sample.value.f64 ?? s.sample.value.i64} ${s.meta.unit}`
+  })
+  host.slots.read('value')  // 首帧
+  return () => off()
+}
+```
+
+设备包自带的 ESM 组件（`ui.widgets[]`）使用同一套 `WidgetHost` 接口；
+示例见 `examples/packages/pm3000/widgets/trend.js`。

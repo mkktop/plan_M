@@ -12,15 +12,16 @@ use crate::workspaces::{workspaces_path, WorkspaceStore};
 use hmi_domain::codec::{encode_num, ByteOrder, DataType, Num};
 use hmi_domain::config::{DeviceConfig, ProjectConfig, SerialChannelConfig};
 use hmi_domain::driver::Driver;
+use hmi_domain::points::PointsTable;
 use hmi_domain::value::{Quality, TagChange, TagId, Value};
 use hmi_packaging::{
-    install as install_package, install_ui_plugin, InstalledUiPlugin, PackageRegistry,
-    UiPluginRegistry,
+    install as install_package, install_ui_plugin, BindingSpec as PkgBindingSpec, InstalledPackage,
+    InstalledUiPlugin, PackageManifest, PackageRegistry, UiPluginRegistry, ValidationIssues,
 };
 use hmi_wire::{
-    ChannelDto, DashboardDto, DeviceDto, DevicePageComponentDto, DevicePageDto, PackageDto,
-    PackageUiDto, PointDto, SnapshotData, UiDevicePanelDto, UiPageDto, UiPluginDto, UiWidgetDto,
-    WorkspaceDto,
+    BindingDeclDto, BindingSpecDto, ChannelDto, DashboardDto, DeviceDto, DevicePageComponentDto,
+    DevicePageDto, PackageDto, PackageUiDto, PackageWidgetDto, PointDto, SnapshotData,
+    UiDevicePanelDto, UiPageDto, UiPluginDto, UiWidgetDto, WidgetSizeDto, WorkspaceDto,
 };
 use semver::Version;
 use std::collections::HashMap;
@@ -439,6 +440,95 @@ impl GatewayService {
         Ok(())
     }
 
+    // —— 包编辑器：草稿校验 / 安装 / 导出（P4）——
+
+    /// 校验 UI 生成的包草稿（不落盘）。
+    pub fn validate_package_draft(
+        &self,
+        manifest_json: &serde_json::Value,
+        points_json: &serde_json::Value,
+    ) -> Result<ValidationIssues, String> {
+        let (manifest, points) = parse_package_draft(manifest_json, points_json)?;
+        Ok(hmi_packaging::validate_package(&manifest, &points))
+    }
+
+    /// 安装 UI 生成的包草稿：写到临时目录后走正式安装流（同一套校验/落盘规则）。
+    pub async fn install_draft_package(
+        &self,
+        manifest_json: &serde_json::Value,
+        points_json: &serde_json::Value,
+    ) -> Result<PackageDto, String> {
+        let (manifest, points) = parse_package_draft(manifest_json, points_json)?;
+        let issues = hmi_packaging::validate_package(&manifest, &points);
+        if !issues.ok() {
+            return Err(format!(
+                "包校验未通过：\n  - {}",
+                issues.errors.join("\n  - ")
+            ));
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "hmi-draft-pkg-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).map_err(|e| format!("创建临时目录失败：{e}"))?;
+        let written = (|| -> Result<(), String> {
+            let m = serde_json::to_string_pretty(manifest_json)
+                .map_err(|e| format!("序列化 manifest 失败：{e}"))?;
+            let p = serde_json::to_string_pretty(points_json)
+                .map_err(|e| format!("序列化点表失败：{e}"))?;
+            std::fs::write(dir.join("manifest.json"), m)
+                .map_err(|e| format!("写入 manifest 失败：{e}"))?;
+            std::fs::write(dir.join("points.json"), p).map_err(|e| format!("写入点表失败：{e}"))?;
+            Ok(())
+        })();
+        let result = written.and_then(|()| {
+            install_package(&dir, &self.data_dir.join("packages"), &self.host_version)
+                .map_err(|e| e.to_string())
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+        let installed = result?;
+        let registry = PackageRegistry::scan(&self.data_dir.join("packages"));
+        *self.packages.write().await = Arc::new(registry);
+        Ok(package_dto(&installed))
+    }
+
+    /// 导出包草稿到本机目录（写 manifest.json + points.json，保留原始 JSON 形态）。
+    pub fn export_package_draft(
+        &self,
+        manifest_json: &serde_json::Value,
+        points_json: &serde_json::Value,
+        dir: &str,
+    ) -> Result<(), String> {
+        if dir.trim().is_empty() {
+            return Err("请填写导出目录".into());
+        }
+        let (manifest, points) = parse_package_draft(manifest_json, points_json)?;
+        let issues = hmi_packaging::validate_package(&manifest, &points);
+        if !issues.ok() {
+            return Err(format!(
+                "包校验未通过：\n  - {}",
+                issues.errors.join("\n  - ")
+            ));
+        }
+        let dir = std::path::Path::new(dir);
+        if dir.exists() && !dir.is_dir() {
+            return Err("导出路径不是目录".into());
+        }
+        std::fs::create_dir_all(dir).map_err(|e| format!("创建导出目录失败：{e}"))?;
+        let m = serde_json::to_string_pretty(manifest_json)
+            .map_err(|e| format!("序列化 manifest 失败：{e}"))?;
+        let p = serde_json::to_string_pretty(points_json)
+            .map_err(|e| format!("序列化点表失败：{e}"))?;
+        std::fs::write(dir.join("manifest.json"), m)
+            .map_err(|e| format!("写入 manifest 失败：{e}"))?;
+        std::fs::write(dir.join("points.json"), p).map_err(|e| format!("写入点表失败：{e}"))?;
+        Ok(())
+    }
+
     // —— UI 插件（ESM 资源由 gatewayd 静态服务，注册表目录为真相源）——
 
     pub async fn ui_plugins(&self) -> Vec<UiPluginDto> {
@@ -454,6 +544,44 @@ impl GatewayService {
     /// 已安装插件的真实目录（目录名不一定等于插件 id：手动拷贝也可能被扫描到）。
     pub async fn ui_plugin_dir(&self, id: &str) -> Option<PathBuf> {
         self.ui_plugins.read().await.get(id).map(|p| p.dir.clone())
+    }
+
+    /// 设备包 ESM 组件资源：只暴露清单声明 entry 所在目录下的文件。
+    ///
+    /// 返回规范化后的真实路径（已校验在包目录内且为普通文件）。
+    pub async fn package_widget_asset(
+        &self,
+        id: &str,
+        version: &str,
+        relative: &str,
+    ) -> Option<PathBuf> {
+        let registry = self.packages.read().await.clone();
+        let pkg = registry.get(id)?;
+        if pkg.manifest.version.to_string() != version {
+            return None;
+        }
+        let rel = std::path::Path::new(relative);
+        if rel.is_absolute()
+            || rel
+                .components()
+                .any(|c| !matches!(c, std::path::Component::Normal(_)))
+        {
+            return None;
+        }
+        let declared = pkg.manifest.ui.widgets.iter().any(|w| {
+            let entry = std::path::Path::new(&w.entry);
+            let dir = entry.parent().unwrap_or_else(|| std::path::Path::new(""));
+            rel == entry || (!dir.as_os_str().is_empty() && rel.starts_with(dir))
+        });
+        if !declared {
+            return None;
+        }
+        let base = std::fs::canonicalize(&pkg.dir).ok()?;
+        let file = std::fs::canonicalize(pkg.dir.join(rel)).ok()?;
+        if !file.starts_with(&base) || !file.is_file() {
+            return None;
+        }
+        Some(file)
     }
 
     /// 安装/升级插件并返回最新列表。
@@ -592,7 +720,7 @@ fn engineering_to_num(
 }
 
 /// 已安装包 → UI DTO（快照与包列表共用）。
-fn package_dto(p: &hmi_packaging::InstalledPackage) -> PackageDto {
+fn package_dto(p: &InstalledPackage) -> PackageDto {
     PackageDto {
         id: p.manifest.id.clone(),
         name: p.manifest.name.clone(),
@@ -614,21 +742,13 @@ fn package_dto(p: &hmi_packaging::InstalledPackage) -> PackageDto {
                         .components
                         .iter()
                         .map(|comp| DevicePageComponentDto {
+                            id: comp.id.clone(),
                             kind: comp.kind.clone(),
                             title: comp.title.clone(),
                             bind: comp
                                 .bind
                                 .iter()
-                                .map(|(slot, b)| {
-                                    (
-                                        slot.clone(),
-                                        hmi_wire::BindingDeclDto {
-                                            point: b.point.clone(),
-                                            bit: b.bit,
-                                            tag: b.tag.clone(),
-                                        },
-                                    )
-                                })
+                                .map(|(slot, spec)| (slot.clone(), binding_spec_dto(spec)))
                                 .collect(),
                             rect: comp.rect.map(|r| hmi_wire::WidgetRectDto {
                                 x: r.x,
@@ -639,6 +759,41 @@ fn package_dto(p: &hmi_packaging::InstalledPackage) -> PackageDto {
                             config: comp.config.clone(),
                         })
                         .collect(),
+                })
+                .collect(),
+            widgets: p
+                .manifest
+                .ui
+                .widgets
+                .iter()
+                .map(|w| PackageWidgetDto {
+                    id: w.id.clone(),
+                    title: w.title.clone(),
+                    description: w.description.clone(),
+                    entry: w.entry.clone(),
+                    size: WidgetSizeDto {
+                        w: w.size.w,
+                        h: w.size.h,
+                        min_w: w.size.min_w,
+                        min_h: w.size.min_h,
+                    },
+                    bindings: w
+                        .bindings
+                        .iter()
+                        .map(|(slot, b)| {
+                            (
+                                slot.clone(),
+                                hmi_wire::WidgetBindingDto {
+                                    kind: b.kind.clone(),
+                                    many: b.many,
+                                    write: b.write,
+                                    required: b.required,
+                                },
+                            )
+                        })
+                        .collect(),
+                    config: w.config.clone(),
+                    permissions: w.permissions.clone(),
                 })
                 .collect(),
         },
@@ -680,6 +835,35 @@ fn package_dto(p: &hmi_packaging::InstalledPackage) -> PackageDto {
             })
             .collect(),
     }
+}
+
+/// 槽位绑定规格 → DTO。
+fn binding_spec_dto(spec: &PkgBindingSpec) -> BindingSpecDto {
+    match spec {
+        PkgBindingSpec::One(b) => BindingSpecDto::One(binding_dto(b)),
+        PkgBindingSpec::Many(v) => BindingSpecDto::Many(v.iter().map(binding_dto).collect()),
+    }
+}
+
+fn binding_dto(b: &hmi_packaging::BindingDecl) -> BindingDeclDto {
+    BindingDeclDto {
+        point: b.point.clone(),
+        bit: b.bit,
+        tag: b.tag.clone(),
+    }
+}
+
+/// 解析包草稿并归一化（v2 widgets[] → components；包内组件短名 → 全局 kind）。
+fn parse_package_draft(
+    manifest_json: &serde_json::Value,
+    points_json: &serde_json::Value,
+) -> Result<(PackageManifest, PointsTable), String> {
+    let mut manifest: PackageManifest = serde_json::from_value(manifest_json.clone())
+        .map_err(|e| format!("manifest 解析失败：{e}"))?;
+    manifest.ui.normalize(&manifest.id);
+    let points: PointsTable =
+        serde_json::from_value(points_json.clone()).map_err(|e| format!("点表解析失败：{e}"))?;
+    Ok((manifest, points))
 }
 
 /// 已安装 UI 插件 → UI DTO。

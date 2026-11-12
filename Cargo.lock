@@ -1524,7 +1524,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hmi-desktop"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "dirs 5.0.1",
  "futures",
@@ -1542,7 +1542,7 @@ dependencies = [
 
 [[package]]
 name = "hmi-domain"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "serde",
@@ -1552,7 +1552,7 @@ dependencies = [
 
 [[package]]
 name = "hmi-driver-modbus-rtu"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "futures",
@@ -1567,7 +1567,7 @@ dependencies = [
 
 [[package]]
 name = "hmi-gateway"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1587,7 +1587,7 @@ dependencies = [
 
 [[package]]
 name = "hmi-gatewayd"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1614,7 +1614,7 @@ dependencies = [
 
 [[package]]
 name = "hmi-packaging"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "hmi-domain",
  "semver",
@@ -1628,7 +1628,7 @@ dependencies = [
 
 [[package]]
 name = "hmi-wire"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "hmi-domain",
  "serde",

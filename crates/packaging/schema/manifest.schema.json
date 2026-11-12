@@ -5,6 +5,68 @@
   "type": "object",
   "required": ["schemaVersion", "id", "name", "version", "protocol"],
   "additionalProperties": true,
+  "definitions": {
+    "bindingDecl": {
+      "type": "object",
+      "description": "槽位绑定：point（相对点）或 tag（绝对 tag，设备包内禁止）二选一；bit 只与 point 组合",
+      "properties": {
+        "point": {
+          "type": "string",
+          "description": "包内相对点 id，渲染时解析为 <设备实例id>.<point>"
+        },
+        "bit": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 15,
+          "description": "位号，解析为 <设备实例id>.<point>.b<bit>"
+        },
+        "tag": {
+          "type": "string",
+          "description": "绝对 tag（仅用户页面允许；设备包内会被拒绝）"
+        }
+      },
+      "additionalProperties": false
+    },
+    "bindingSpec": {
+      "description": "单绑定或绑定数组（many 槽位）",
+      "oneOf": [
+        { "$ref": "#/definitions/bindingDecl" },
+        { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/bindingDecl" } }
+      ]
+    },
+    "bindMap": {
+      "type": "object",
+      "description": "槽位 → 绑定；设备包只允许相对点绑定",
+      "additionalProperties": { "$ref": "#/definitions/bindingSpec" }
+    },
+    "rect": {
+      "type": "object",
+      "description": "12 列网格位置（0 基）；整页要么全部声明、要么全部省略（流式）",
+      "required": ["x", "y", "w", "h"],
+      "properties": {
+        "x": { "type": "integer", "minimum": 0, "maximum": 11 },
+        "y": { "type": "integer", "minimum": 0 },
+        "w": { "type": "integer", "minimum": 1, "maximum": 12 },
+        "h": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "component": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "id": { "type": "string", "maxLength": 64, "description": "v2 组件实例 id" },
+        "kind": {
+          "type": "string",
+          "description": "核心组件（core:value 等，裸名为别名）、本包 ui.widgets 的 <包id>:<短名>，或 plugin:<插件id>:<组件id>"
+        },
+        "title": { "type": "string", "maxLength": 120 },
+        "rect": { "$ref": "#/definitions/rect" },
+        "bind": { "$ref": "#/definitions/bindMap" },
+        "config": { "type": ["object", "null"] }
+      }
+    }
+  },
   "properties": {
     "schemaVersion": { "type": "integer", "const": 1 },
     "id": {
@@ -19,85 +81,88 @@
     "minHostVersion": { "type": "string" },
     "ui": {
       "type": "object",
-      "description": "设备类型工作区默认页面；缺省时宿主使用内置四页",
+      "description": "设备包 UI：页面 + 自带 ESM 组件",
       "properties": {
+        "widgets": {
+          "type": "array",
+          "maxItems": 16,
+          "description": "设备包自带的 ESM 小组件；全局 kind = <包id>:<id>",
+          "items": {
+            "type": "object",
+            "required": ["id", "title", "entry"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$", "maxLength": 64 },
+              "title": { "type": "string", "minLength": 1, "maxLength": 120 },
+              "description": { "type": "string" },
+              "entry": {
+                "type": "string",
+                "pattern": "^widgets/[^/]+\\.(js|mjs)$",
+                "description": "包目录内的 ESM 入口，必须在 widgets/ 下"
+              },
+              "size": {
+                "type": "object",
+                "properties": {
+                  "w": { "type": "integer", "minimum": 1, "maximum": 12 },
+                  "h": { "type": "integer", "minimum": 1 },
+                  "minW": { "type": "integer", "minimum": 1 },
+                  "minH": { "type": "integer", "minimum": 1 }
+                }
+              },
+              "bindings": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "type": { "enum": ["point", "value", "text"] },
+                    "many": { "type": "boolean" },
+                    "write": { "type": "boolean" },
+                    "required": { "type": "boolean" }
+                  }
+                }
+              },
+              "config": { "type": ["object", "null"] },
+              "permissions": {
+                "type": "array",
+                "items": { "enum": ["tags:read", "tags:subscribe", "tags:write", "notify"] }
+              }
+            }
+          }
+        },
         "pages": {
           "type": "array",
           "maxItems": 50,
           "items": {
             "type": "object",
-            "required": ["id", "title", "components"],
+            "required": ["id", "title"],
             "properties": {
               "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$", "maxLength": 64 },
               "title": { "type": "string", "minLength": 1, "maxLength": 120 },
               "icon": { "type": "string", "maxLength": 64 },
-              "components": {
+              "schemaVersion": { "enum": [1, 2], "description": "2 = widgets[] 形态" },
+              "layout": {
+                "type": "object",
+                "properties": {
+                  "cols": { "const": 12 },
+                  "rowHeight": { "type": "integer", "minimum": 1 },
+                  "gap": { "type": "integer", "minimum": 0 }
+                }
+              },
+              "widgets": {
                 "type": "array",
                 "minItems": 1,
                 "maxItems": 20,
                 "items": {
-                  "type": "object",
-                  "required": ["kind"],
-                  "properties": {
-                    "kind": {
-                      "enum": [
-                        "overview",
-                        "dashboard",
-                        "tags",
-                        "settings",
-                        "value",
-                        "gauge",
-                        "switch",
-                        "input",
-                        "bits",
-                        "core:value",
-                        "core:gauge",
-                        "core:switch",
-                        "core:input",
-                        "core:bits"
-                      ],
-                      "description": "宿主组件：overview/dashboard/tags/settings/core:value/core:gauge/core:switch/core:input/core:bits（裸名为兼容别名）"
-                    },
-                    "title": { "type": "string", "maxLength": 120 },
-                    "rect": {
-                      "type": "object",
-                      "description": "12 列网格位置（0 基）；整页要么全部声明、要么全部省略（流式）",
-                      "required": ["x", "y", "w", "h"],
-                      "properties": {
-                        "x": { "type": "integer", "minimum": 0, "maximum": 11 },
-                        "y": { "type": "integer", "minimum": 0 },
-                        "w": { "type": "integer", "minimum": 1, "maximum": 12 },
-                        "h": { "type": "integer", "minimum": 1 }
-                      },
-                      "additionalProperties": false
-                    },
-                    "bind": {
-                      "type": "object",
-                      "description": "槽位 → 绑定。设备包只允许相对点绑定（point/bit），禁止绝对 tag",
-                      "additionalProperties": {
-                        "type": "object",
-                        "properties": {
-                          "point": {
-                            "type": "string",
-                            "description": "包内相对点 id，渲染时解析为 <设备实例id>.<point>"
-                          },
-                          "bit": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "maximum": 15,
-                            "description": "位号，解析为 <设备实例id>.<point>.b<bit>"
-                          },
-                          "tag": {
-                            "type": "string",
-                            "description": "绝对 tag（仅用户页面允许；设备包内会被拒绝）"
-                          }
-                        },
-                        "additionalProperties": false
-                      }
-                    },
-                    "config": { "type": ["object", "null"] }
-                  }
+                  "allOf": [
+                    { "$ref": "#/definitions/component" },
+                    { "required": ["kind"] }
+                  ]
                 }
+              },
+              "components": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 20,
+                "items": { "$ref": "#/definitions/component" }
               }
             }
           }

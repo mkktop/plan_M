@@ -5,8 +5,11 @@
 - `u16` + scale（电压/电流）
 - `i32`/`u32` + `cdab` 字交换字节序（功率/电度 —— 国产电表最常见排列）
 - 状态字 `bits` 位展开（`status.b0` 运行 / `status.b2` 报警）
-- `rw` 可写点（setpoint）
+- `rw` 可写点（setpoint 带 min/max/step，mode 带枚举）
 - 双轮询组：`fast` 1s / `slow` 60s（电度慢采，省 485 带宽）
+- 包内 ESM 组件：`widgets/trend.js` 多点实时趋势（`ui.widgets[]` 声明、`/packages` 静态路由）
+- 页面两种写法并存：`overview` 用 v1 `components[]`，`monitor`/`trend` 用 v2
+  `schemaVersion: 2 + widgets[]`（`layout` 12 列、行高 72px）
 
 ## 用法
 

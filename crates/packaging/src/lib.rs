@@ -15,14 +15,18 @@ pub mod validate;
 pub use install::{
     install, load_package_dir, InstalledPackage, LoadedPackage, PackageError, PackageRegistry,
 };
-pub use manifest::{PackageManifest, PackageUiDecl, ProtocolDecl, UiComponentDecl, UiPageDecl};
+pub use manifest::{
+    BindingDecl, BindingSpec, PackageManifest, PackageUiDecl, PageLayoutDecl, ProtocolDecl,
+    UiComponentDecl, UiPageDecl, UiWidgetDecl, UiWidgetInstanceDecl, WidgetBindingDecl,
+    WidgetRectDecl, WidgetSizeDecl,
+};
 pub use ui_plugin::{
     install_ui_plugin, load_ui_plugin_dir, validate_ui_plugin, InstalledUiPlugin, UiPluginError,
     UiPluginManifest, UiPluginRegistry, ALLOWED_PERMISSIONS, SDK_VERSION,
 };
 pub use validate::{
-    validate_component_rects, validate_package, ValidationIssues, ALLOWED_DEVICE_PAGE_COMPONENTS,
-    PAGE_GRID_COLS,
+    is_allowed_device_component_kind, validate_component_rects, validate_package, ValidationIssues,
+    ALLOWED_DEVICE_PAGE_COMPONENTS, ALLOWED_WIDGET_PERMISSIONS, PAGE_GRID_COLS,
 };
 
 /// JSON Schema 文本（供编辑器补全/校验，与运行时 Rust 校验并行存在）。

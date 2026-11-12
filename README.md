@@ -3,7 +3,7 @@
 可扩展、高自定义的工业上位机。核心思路：**声明式设备包 + 双进程架构 + 订阅制实时数据**。
 
 已交付「采集核心 + gatewayd」「Tauri 2 + Vue 3 桌面 UI」「设备包导入 + 仪表盘」
-「ESM UI 插件」与「设备工作区」（一个标签 = 一台设备）。
+「ESM UI 插件」「设备工作区（一个标签 = 一台设备）」与「包编辑器（全程表单建型号）」。
 采集进程可独立常驻运行，桌面壳只是它的 WebSocket 客户端；UI 崩溃/关闭不影响采集。
 
 ## 架构
@@ -13,10 +13,11 @@
 │ 顶部：设备标签页（一个标签 = 一台设备，"+" 选择设备）     │
 │ 左侧：当前设备的页面（设备包声明 + 用户自定义）           │
 │       底部固定「切换系统菜单」入口（设备 / 设备包 / 插件 …）
-│ 页面组件：概览 / 仪表盘 / 实时点表 / 参数设置 + 插件组件  │
+│ 页面组件：核心小组件 / 组合容器 / 插件与包内 ESM 组件       │
 └──────────────┬──────────────────────────────────────┘
                │ WebSocket @127.0.0.1:59120（JSON 消息，token 鉴权）
                │ HTTP /plugins/<id>/<entry>（插件 ESM 静态资源）
+               │ HTTP /packages/<id>/<ver>/<entry>（设备包 ESM 组件）
 ┌──────────────┴──────────────┐
 │ gatewayd 采集进程（常驻）     │
 │ ├─ 通道监督器 × N（串口）     │
@@ -25,7 +26,7 @@
 │ ├─ 设备包注册表（声明式）     │
 │ ├─ 工作区页面存储             │
 │ ├─ UI 插件注册表 + 静态服务   │
-│ └─ axum：/health + /ws + /plugins │
+│ └─ axum：/health + /ws + /plugins + /packages │
 └───┬─────────┬───────────────┘
  COM3      COM5     …（每条 485 总线一个通道，挂 N 个从站）
 ```
@@ -48,7 +49,7 @@ crates/
 │                     仪表盘布局（dashboards.json）、设备类型工作区（workspaces.json）
 └─ wire/              gatewayd ↔ UI 的 WS 消息契约（serde，两端共用）
 apps/
-├─ gatewayd/          CLI：serve / poll / scan / pkg；HTTP 静态服务 /plugins/<id>/<entry>
+├─ gatewayd/          CLI：serve / poll / scan / pkg；HTTP 静态服务 /plugins、/packages
 └─ desktop/
    ├─ src-tauri/      Tauri 2 薄壳（gateway_info / 应用更新命令；不写业务逻辑）
    ├─ ui/             Vue 3 + TS + Vite + Pinia（WS 客户端 / 业务页 / 设置页 / 插件宿主）
@@ -56,7 +57,7 @@ apps/
 scripts/              发版辅助：版本同步 / 一致性校验 / 安装包 staging / Release 校验上传
 .github/workflows/    check.yml（构建）+ release.yml（tag → draft Release）
 examples/packages/
-└─ pm3000/            示例设备包（三相电表，覆盖 u16/u32/i32/cdab/BCD/位展开/可写点/双轮询组）
+└─ pm3000/            示例设备包（三相电表，覆盖 u16/u32/i32/cdab/BCD/位展开/可写点/双轮询组 + 包内 ESM 趋势组件）
 examples/ui-plugins/
 └─ meter-card/        示例 UI 插件（零依赖 ESM：仪表盘组件 + 导航页）
 ```
@@ -65,7 +66,7 @@ examples/ui-plugins/
 
 ```bash
 cargo build --workspace
-cargo test --workspace          # 126 个测试：编解码/帧/虚拟总线端到端/包校验/插件安装/工作区/仪表盘/WS 协议/更新校验
+cargo test --workspace          # 136 个测试：编解码/帧/虚拟总线端到端/包校验/插件安装/工作区/仪表盘/WS 协议/包编辑器草稿/更新校验
 
 # 1) 校验示例设备包
 gatewayd pkg validate examples/packages/pm3000
@@ -230,24 +231,31 @@ Tauri 侧只加了一个 `tauri-plugin-dialog`（文件/目录选择）与 `gate
 }
 ```
 
-宿主组件白名单（v1）：
+宿主组件（kind；裸名是 v1 别名）：
 
-- `overview`：设备状态/质量统计/通道与包信息；
-- `dashboard`：当前设备的仪表盘画布（每个实例独立布局）；
-- `tags`：当前设备的实时点表与写值；
-- `settings`：设备实例名称/通道/从站/overrides；
+- `core:overview` / `overview`：设备状态/质量统计/通道与包信息；
+- `core:dashboard` / `dashboard`：当前设备的仪表盘画布（每个实例独立布局）；
+- `core:tags` / `tags`：当前设备的实时点表与写值；
+- `core:settings` / `settings`：设备实例名称/通道/从站/overrides；
 - `core:value`（别名 `value`）：绑定一个点/位，显示工程量、质量与单位；
 - `core:gauge`（别名 `gauge`）：绑定一个数值点，按 `min/max` 显示弧线刻度；
 - `core:switch`（别名 `switch`）：绑定可写点，点击写入 0/1（线圈点写布尔）；
 - `core:input`（别名 `input`）：按 `min/max/step/enum` 生成数值输入或枚举下拉；
-- `core:bits`（别名 `bits`）：绑定一个字点，按 `bits` 定义逐位展示状态与质量。
+- `core:bits`（别名 `bits`）：绑定一个字点，按 `bits` 定义逐位展示状态与质量；
+- `core:group`：声明式组合容器，`config.items[]` 按组内 12 列网格再排子组件（无代码）；
+- `plugin:<插件id>:<组件id>`：已安装 UI 插件的组件；
+- `<包id>:<组件短名>`：设备包自带的 ESM 组件（`ui.widgets[]` 声明）。
 
 规则：
 
-- 包未声明 `ui` 时使用宿主内置四页（概览/仪表盘/实时点表/参数设置），旧包无需修改。
+- **页面有两种写法**：v1 `components[]`，或 v2 `{ "schemaVersion": 2, "layout": {...}, "widgets": [...] }`；
+  v2 在读取时翻译成内存 `components[]`（保留实例 `id`），旧包与旧用户页面零迁移。
+- 包未声明 `ui.pages` 时：**有点表**则按点表生成预设组合页（概览/参数设置/状态位/实时点表/设备设置），
+  无点表回落到宿主内置四页。
 - **绑定是相对点**：`bind` 是「槽位 → `{point, bit}`」；宿主在渲染时解析成
   `<当前设备实例id>.<point>[.b<bit>]`，同一页面可被同型号的多台设备复用。
   `point` 必须存在于本包点表，`bit` 必须在该点 `bits` 里声明过（安装时校验）。
+  多点槽位（趋势图等）写数组：`"series": [{ "point": "uab" }, { "point": "ia" }]`。
 - **绝对 tag 只属于用户页面**：设备包清单里出现 `{ "tag": "pm1.uab" }` 会被安装拒绝；
   用户在工作区编辑页面时可用绝对 tag 做跨设备组态。
 - **网格布局**：组件可带 `rect: {x,y,w,h}`（12 列、0 基、行高 72px、间距 12px）；
@@ -258,11 +266,66 @@ Tauri 侧只加了一个 `tauri-plugin-dialog`（文件/目录选择）与 `gate
   `core:input` 支持覆盖点表的 `min`/`max`/`step`/`decimals`。
 - **写值由宿主把关**：`access` 必须为 `rw`；数值按点表 `min/max` 校验；
   位绑定采用“读父点整字 → 改位 → 写回”，点带 `scale/offset` 时拒绝位写（请直接写父点）。
+- **ESM 组件统一宿主**：v2 组件在 ShadowRoot 里挂载，只通过 `host.slots` 取/写值，
+  样式只用宿主注入的 `--pm-color-*` 变量；v1 插件（`mount(el, ctx, props)`）继续在 light DOM 兼容运行。
 - 页面按**类型共享**；用户在工作区点「编辑页面」可增删页面、改名、排序，并在页面里组合组件。
 - 用户修改保存到 `<data-dir>/workspaces.json`；「恢复包默认页面」会删除该类型覆盖。
 - 包升级不会自动覆盖已保存的自定义页面；需要新默认页面时点恢复。
 - 顶部设备标签 = 已打开的设备实例（一个标签一台设备）；「+」弹出选择器，设备删除后标签自动清掉。
 - 设备实例切换只影响组件数据；仪表盘按实例独立保存（`DashboardDto.scopeKind=device`）。
+
+### 包内 ESM 组件（设备包）
+
+设备包目录可以带 `widgets/`，在 manifest 里声明后页面直接用短名引用：
+
+```json
+"ui": {
+  "widgets": [{
+    "id": "trend", "title": "趋势图", "entry": "widgets/trend.js",
+    "size": { "w": 12, "h": 4, "minW": 4, "minH": 2 },
+    "bindings": { "series": { "type": "point", "many": true, "required": true } },
+    "permissions": ["tags:read"]
+  }],
+  "pages": [{
+    "schemaVersion": 2, "id": "trend", "title": "趋势",
+    "widgets": [{
+      "id": "w-trend", "kind": "trend", "rect": { "x": 0, "y": 0, "w": 12, "h": 4 },
+      "bind": { "series": [{ "point": "uab" }, { "point": "ia" }] },
+      "config": { "windowSec": 60 }
+    }]
+  }]
+}
+```
+
+```js
+// widgets/trend.js —— 只认槽位，不接触 tag 寻址
+export function mount(host) {
+  const off = host.slots.sub('series', (samples) => { /* 画到 host.el */ })
+  const initial = host.slots.read('series')   // 首帧同步渲染，避免闪空
+  return () => off()
+}
+```
+
+- 入口 URL：`/packages/<包id>/<版本>/widgets/trend.js`（gatewayd 静态服务）；
+  只暴露声明 entry 所在目录下的文件，其余 404。
+- 权限：`tags:read`（兼容 `tags:subscribe`）/ `tags:write` / `notify`；
+  未声明的能力在 `host.slots.*` / `host.notify` 处直接拒绝。
+- 示例：`examples/packages/pm3000/widgets/trend.js` + 同包「趋势」页。
+
+### 包编辑器（新建设备包）
+
+设备包页的「新建设备包」是**全程表单**的建包流程（不需要手写 JSON）：
+
+1. **基本信息**：包 id / 名称 / 厂商 / 版本 / 描述 / 驱动；
+2. **点表**：轮询组、点位（地址、类型、读写、scale/offset/unit、min/max/step）、
+   位定义（位号/名称/置位与复位文案）、枚举写值；
+3. **页面**：核心组件组合（值/仪表/开关/输入/位表/组合容器），结构化选择绑定点与位、编辑 rect；
+   可一键「按点表生成预设页面」（概览/参数/状态位/实时点表/设备设置）；
+4. **预览与导出**：静态网格预览 + gatewayd 实时校验（与安装同一套规则）；
+   可保存并安装（走正式安装流）、安装并添加设备，或导出 `manifest.json + points.json` 到本机目录。
+
+草稿自动存 localStorage；校验有 errors 时禁止安装/导出。示例：
+不写任何 JSON，用编辑器建 `com.test.studio`（4 点 + 5 页）→ 添加设备 → 设备页实时数据与写值。
 
 ## UI 插件（ESM）
 
@@ -303,6 +366,10 @@ export function mount(el, ctx, props) {
 - **插件不自己开 WebSocket**：`ctx.tags.subscribe/read/write` 由宿主聚合、按 tag 引用计数去重、断线重连后重放。
 - **仪表盘组件** kind 为 `plugin:<插件id>:<组件id>`；布局只保存 kind/tag/config，
   `config` 是插件私有 JSON（示例支持 `min/max/decimals`），宿主原样透传。
+- **同一份组件也能进设备页**：设备页编辑器里直接出现已加载插件的组件；
+  v1 插件继续用 `mount(el, ctx, props)`（light DOM 兼容，`ctx.tags` 被限制在该组件 bind 的 tag 内）；
+  v2 组件可导出 `mountWidget(host)`，用 `host.slots.sub/read/meta/write` 按槽位取写值
+  （ShadowRoot + 主题变量 + 权限门面，与设备包 ESM 组件同一宿主）。
 - **导航页** 自动注册到侧栏（路由 `/plugin/<插件id>/<页面id>`）；插件删除后导航项与组件一起失效。
 - **资源服务**：gatewayd 的 `GET /plugins/<id>/<entry>`（CORS + `no-cache`）；安装落到
   `<data-dir>/ui-plugins/<id>/`，目录为真相源，重启自动扫描。
@@ -317,11 +384,14 @@ export function mount(el, ctx, props) {
 `removePackage{id}`（有设备在用时拒绝）/
 `getDashboards` / `saveDashboard{dashboard}` / `removeDashboard{id}` /
 `getUiPlugins` / `importUiPlugin{path}` / `removeUiPlugin{id}` /
-`getWorkspaces` / `saveWorkspace{workspace}` / `removeWorkspace{deviceType}`
+`getWorkspaces` / `saveWorkspace{workspace}` / `removeWorkspace{deviceType}` /
+`validatePackage{manifest,points}` / `installDraftPackage{manifest,points}` /
+`exportPackage{manifest,points,dir}`
 
 服务端 → 客户端：`welcome` / `snapshot` / `changes{items}`（10~20ms 合并批量）/
 `channelState` / `deviceState` / `scanProgress` / `scanDone` / `serialPorts` / `packages` /
-`dashboards` / `uiPlugins` / `workspaces` / `commandOk` / `error`
+`dashboards` / `uiPlugins` / `workspaces` / `packageValidation{errors,warnings}` /
+`commandOk` / `error`
 
 仪表盘布局（`DashboardDto`）：`{ id, name, cols, scopeKind?, scopeId?, widgets[] }`；widget 为
 `{ id, kind, title, tag, unit, config, layout{x,y,w,h} }`。`config` 由组件自行解释
@@ -333,10 +403,13 @@ UI 插件（`UiPluginDto`）：`{ id, name, version, sdkVersion, permissions[], 
 `getUiPlugins/importUiPlugin/removeUiPlugin` 统一以 `uiPlugins` 返回完整列表；安装支持目录或 zip。
 
 设备工作区（`WorkspaceDto`）：`{ deviceType, pages[] }`；page 为
-`{ id, title, icon, components[{ kind, title, bind?, rect?, config }] }`，组件绑定为
-`{ 槽位: { point, bit } | { tag } }`，`rect` 为 `{ x, y, w, h }`（12 列网格）。`deviceType` 是设备包 id；
-`getWorkspaces/saveWorkspace/removeWorkspace` 统一以 `workspaces` 返回完整列表。
-`PackageDto.ui.pages` 提供包默认页面，`workspaces` 保存用户覆盖。
+`{ id, title, icon, components[{ id?, kind, title, bind?, rect?, config }] }`，组件绑定为
+`{ 槽位: { point, bit } | { tag } | 声明数组 }`，`rect` 为 `{ x, y, w, h }`（12 列网格）。
+`deviceType` 是设备包 id；`getWorkspaces/saveWorkspace/removeWorkspace` 统一以 `workspaces` 返回完整列表。
+`PackageDto.ui.pages` 提供包默认页面，`PackageDto.ui.widgets` 提供包内 ESM 组件声明
+（`{ id, title, entry, size, bindings, config, permissions }`，全局 kind = `<包id>:<id>`），
+`workspaces` 保存用户覆盖。组件 kind 校验为「核心组件 + 本包 ui.widgets + `plugin:` 形态」，
+插件/包是否存在由渲染时解析（缺组件显示占位卡，不阻塞页面保存）。
 
 ## 发版与更新
 

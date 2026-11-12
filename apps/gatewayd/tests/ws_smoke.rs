@@ -97,8 +97,12 @@ async fn ws_full_protocol_smoke() {
         .iter()
         .find(|p| p.id == "com.acme.pm3000")
         .unwrap();
-    assert_eq!(pm.ui.pages.len(), 5, "演示包应声明五页工作区");
+    assert_eq!(pm.ui.pages.len(), 6, "演示包应声明六页工作区");
     assert_eq!(pm.ui.pages[0].components[0].kind, "overview");
+    // P3：包自带 ESM 组件声明随包下发（UI 据此注册 kind + 入口 URL）
+    assert_eq!(pm.ui.widgets.len(), 1);
+    assert_eq!(pm.ui.widgets[0].id, "trend");
+    assert_eq!(pm.ui.widgets[0].entry, "widgets/trend.js");
     // 小组件页的 bind 必须原样通过 snapshot 下发给 UI（相对点由宿主解析）
     let monitor = pm
         .ui
@@ -111,8 +115,8 @@ async fn ws_full_protocol_smoke() {
         monitor.components[0]
             .bind
             .get("value")
-            .and_then(|b| b.point.as_deref()),
-        Some("uab")
+            .map(|b| b.decls()[0].point.as_deref()),
+        Some(Some("uab"))
     );
     assert_eq!(
         monitor.components[0]
@@ -238,6 +242,7 @@ async fn ws_full_protocol_smoke() {
                 title: "设备概览".into(),
                 icon: "pulse".into(),
                 components: vec![DevicePageComponentDto {
+                    id: None,
                     kind: "overview".into(),
                     title: String::new(),
                     bind: Default::default(),
@@ -251,6 +256,7 @@ async fn ws_full_protocol_smoke() {
                 icon: "grid".into(),
                 components: vec![
                     DevicePageComponentDto {
+                        id: None,
                         kind: "tags".into(),
                         title: "点表".into(),
                         bind: Default::default(),
@@ -258,6 +264,7 @@ async fn ws_full_protocol_smoke() {
                         config: serde_json::json!({}),
                     },
                     DevicePageComponentDto {
+                        id: None,
                         kind: "dashboard".into(),
                         title: String::new(),
                         bind: Default::default(),
