@@ -1,4 +1,5 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
+import { useProjectStore } from '@/stores/project'
 
 export const router = createRouter({
   // 桌面壳加载本地文件，hash 路由最稳（无需服务端 fallback）。
@@ -46,9 +47,32 @@ export const router = createRouter({
       meta: { title: '插件页面' },
     },
     {
-      path: '/t/:typeId/:pageId?',
+      // 设备工作区：一个标签页 = 一台设备，页面来自该设备的设备包
+      path: '/d/:deviceId/:pageId?',
       component: () => import('@/pages/DeviceWorkspacePage.vue'),
       meta: { title: '设备工作区' },
+    },
+    {
+      // 旧「设备类型」工作区路径：?device= 深链直达对应设备；否则落到该型号第一台
+      // 设备（等工作区快照加载，最多 4s），没有设备时引导去添加。
+      path: '/t/:typeId/:pageId?',
+      component: { render: () => null },
+      beforeEnter: async (to) => {
+        const project = useProjectStore()
+        const page = typeof to.params.pageId === 'string' ? to.params.pageId : ''
+        const device = typeof to.query.device === 'string' ? to.query.device : ''
+        const target = (id: string) => ({ path: page ? `/d/${id}/${page}` : `/d/${id}` })
+        if (device) return target(device)
+        for (let i = 0; i < 40 && !project.loaded; i += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 100))
+        }
+        const first = project.devices.find((d) => d.package === to.params.typeId)
+        if (first) return target(first.id)
+        return {
+          path: '/devices',
+          query: { add: '1', package: String(to.params.typeId ?? '') },
+        }
+      },
     },
     {
       // 全局实时点表并入诊断页的「数据浏览」标签；保留旧路径与 ?device= 深链

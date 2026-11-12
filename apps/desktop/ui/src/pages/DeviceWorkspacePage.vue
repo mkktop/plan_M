@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NButton, NSelect } from 'naive-ui'
+import { NButton } from 'naive-ui'
 import AppIcon from '@/components/AppIcon.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import DevicePagesEditor from '@/components/DevicePagesEditor.vue'
@@ -19,11 +19,15 @@ const project = useProjectStore()
 const workspaces = useWorkspacesStore()
 const conn = useConnectionStore()
 
-const typeId = computed(() => String(route.params.typeId ?? ''))
-const pkg = computed(() => project.packageById.get(typeId.value) ?? null)
-const devices = computed(() => project.devices.filter((d) => d.package === typeId.value))
-const onlineCount = computed(() => devices.value.filter((d) => d.online).length)
+// 一个工作区 = 一台设备；页面来自该设备的设备包（按类型共享，可被用户覆盖）。
+const deviceId = computed(() => String(route.params.deviceId ?? ''))
+const device = computed(() => project.devices.find((d) => d.id === deviceId.value) ?? null)
+const pkg = computed(() => project.packageOf(device.value) ?? null)
+const channelName = computed(
+  () => project.channels.find((c) => c.id === device.value?.channelId)?.name ?? '',
+)
 
+const typeId = computed(() => pkg.value?.id ?? '')
 const saved = computed(() => workspaces.get(typeId.value))
 const overridden = computed(() => Boolean(saved.value))
 const pages = computed(() => pagesForPackage(pkg.value, saved.value))
@@ -71,56 +75,19 @@ function rectStyle(comp: DevicePageComponentDto): Record<string, string> {
   }
 }
 
-// /t/<type> 或已删除的页面 id → 规范到第一页，左侧导航才能正确高亮。
+// 已删除的页面 id → 规范到第一页，左侧导航才能正确高亮。
 watch(
   () => [requestedPageId.value, pages.value.map((p) => p.id).join(',')] as const,
   () => {
-    // 等工作区覆盖加载完再判断，否则直链/刷新自定义页面会被提前重定向到第一页。
     if (!workspaces.loaded) return
     if (!activePage.value) return
     const exists = pages.value.some((p) => p.id === requestedPageId.value)
-    if (!exists) {
-      void router.replace({
-        path: `/t/${typeId.value}/${activePage.value.id}`,
-        query: route.query,
-      })
+    if (!exists && deviceId.value) {
+      void router.replace(`/d/${deviceId.value}/${activePage.value.id}`)
     }
   },
   { immediate: true },
 )
-
-const selectedDeviceId = ref('')
-const deviceOptions = computed(() =>
-  devices.value.map((d) => ({
-    label: `${d.name || d.id} · #${d.slave}${d.online ? '' : '（离线）'}`,
-    value: d.id,
-  })),
-)
-const selectedDevice = computed(
-  () => devices.value.find((d) => d.id === selectedDeviceId.value) ?? null,
-)
-
-watch(
-  () => [route.query.device, devices.value.map((d) => d.id).join(',')] as const,
-  () => {
-    const q = typeof route.query.device === 'string' ? route.query.device : ''
-    if (q && devices.value.some((d) => d.id === q)) {
-      selectedDeviceId.value = q
-      return
-    }
-    if (!devices.value.some((d) => d.id === selectedDeviceId.value)) {
-      selectedDeviceId.value = devices.value[0]?.id ?? ''
-    }
-  },
-  { immediate: true },
-)
-
-function onDeviceChange(value: string): void {
-  selectedDeviceId.value = value
-  void router.replace({
-    query: value ? { ...route.query, device: value } : { ...route.query, device: undefined },
-  })
-}
 
 function addDevice(): void {
   void router.push({
@@ -138,33 +105,27 @@ onMounted(() => {
 
 <template>
   <div class="page ws-page">
-    <section v-if="pkg" class="card ws-head">
+    <section v-if="device && pkg" class="card ws-head">
       <div class="ws-identity">
-        <span class="ws-glyph"><AppIcon name="package" :size="22" /></span>
+        <span class="ws-glyph"><AppIcon name="chip" :size="22" /></span>
         <div class="ws-identity-main">
-          <span class="ws-kicker">设备类型</span>
-          <h2>{{ pkg.name }}</h2>
+          <span class="ws-kicker">设备实例</span>
+          <h2>{{ device.name || device.id }}</h2>
           <div class="ws-meta">
+            <span class="mono">{{ device.id }}</span>
+            <span>从站 #{{ device.slave }}</span>
+            <span v-if="channelName">{{ channelName }}</span>
+            <span class="ws-meta-sep" />
+            <span class="online-dot" :class="{ on: device.online }" />
+            <span>{{ device.online ? '在线' : '离线' }}</span>
+            <span class="ws-meta-sep" />
             <span class="mono">{{ pkg.id }}</span>
             <span>v{{ pkg.version }}</span>
-            <span v-if="pkg.vendor">{{ pkg.vendor }}</span>
-            <span class="ws-meta-sep" />
-            <span class="online-dot" :class="{ on: onlineCount > 0 }" />
-            <span>{{ onlineCount }}/{{ devices.length }} 在线</span>
           </div>
         </div>
       </div>
 
       <div class="ws-actions">
-        <n-select
-          v-if="devices.length"
-          :value="selectedDeviceId"
-          :options="deviceOptions"
-          class="ws-device-select"
-          size="small"
-          placeholder="选择设备实例"
-          @update:value="onDeviceChange"
-        />
         <n-button size="small" @click="addDevice">
           <template #icon><AppIcon name="plus" :size="14" /></template>
           添加设备
@@ -177,33 +138,34 @@ onMounted(() => {
     </section>
 
     <EmptyState
-      v-if="!pkg && project.loaded"
+      v-if="!device && project.loaded"
+      icon="chip"
+      title="设备不存在"
+      text="该设备可能已被删除，请到设备页确认，或从顶部「+」重新选择。"
+    >
+      <n-button size="small" @click="router.push('/devices')">去设备页</n-button>
+    </EmptyState>
+
+    <EmptyState
+      v-else-if="device && !pkg && project.loaded"
       icon="package"
       title="设备包未安装"
-      text="该设备类型对应的包可能已被移除，请到设备包页确认。"
+      text="该设备对应的设备包已被移除，请先重新导入。"
     >
       <n-button size="small" @click="router.push('/packages')">去设备包页</n-button>
     </EmptyState>
 
-    <template v-else-if="pkg">
-      <div v-if="!devices.length" class="card ws-empty">
-        <div class="empty-icon"><AppIcon name="chip" :size="24" /></div>
-        <h3>这个类型还没有设备</h3>
-        <p class="muted">左侧页面已由设备包定义；添加一台设备后即可查看实时数据。</p>
-        <n-button size="small" type="primary" @click="addDevice">添加此型号设备</n-button>
-      </div>
-
-      <section v-if="activePage && selectedDevice" class="ws-content">
+    <template v-else-if="device && pkg">
+      <section v-if="activePage" class="ws-content">
         <header class="ws-page-head">
           <div>
             <h3>{{ activePage.title }}</h3>
             <p class="muted small">
-              {{ selectedDevice.name || selectedDevice.id }} · 从站 #{{ selectedDevice.slave }}
-              <span v-if="selectedDevice.online" class="text-good"> · 在线</span>
-              <span v-else class="text-bad"> · 离线</span>
+              {{ pkg.name }} 的页面 · 按设备类型共享
+              <span v-if="overridden"> · 自定义页面</span>
             </p>
           </div>
-          <span class="muted small mono">{{ typeId }}</span>
+          <span class="muted small mono">{{ pkg.id }}</span>
         </header>
 
         <!-- 12 列网格：组件按 rect 绝对定位，窄屏自动单列 -->
@@ -216,12 +178,12 @@ onMounted(() => {
           >
             <DeviceWidgetCard
               v-if="isCompactWidgetKind(comp.kind)"
-              :device-id="selectedDevice.id"
+              :device-id="deviceId"
               :component="comp"
             />
             <div v-else class="ws-canvas-block">
               <div v-if="comp.title" class="ws-component-head">{{ comp.title }}</div>
-              <DevicePageBlock :device-id="selectedDevice.id" :component="comp" />
+              <DevicePageBlock :device-id="deviceId" :component="comp" />
             </div>
           </div>
         </div>
@@ -233,14 +195,14 @@ onMounted(() => {
               <DeviceWidgetCard
                 v-for="item in block.items"
                 :key="`${activePage.id}-${item.index}`"
-                :device-id="selectedDevice.id"
+                :device-id="deviceId"
                 :component="item.comp"
               />
             </div>
 
             <div v-else class="ws-component">
               <div v-if="block.comp.title" class="ws-component-head">{{ block.comp.title }}</div>
-              <DevicePageBlock :device-id="selectedDevice.id" :component="block.comp" />
+              <DevicePageBlock :device-id="deviceId" :component="block.comp" />
             </div>
           </template>
         </template>

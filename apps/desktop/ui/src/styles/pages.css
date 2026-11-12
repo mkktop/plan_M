@@ -1483,6 +1483,51 @@
   font-size: 9px;
 }
 
+/* 设备标签：在线点 + 名称 + 从站号 + 关闭 */
+.device-tab {
+  gap: 6px;
+  padding-right: 6px;
+  user-select: none;
+}
+
+.device-tab .online-dot {
+  flex: none;
+}
+
+.type-tab-sub {
+  color: var(--text-3);
+  font-size: 9.5px;
+}
+
+.type-tab.active .type-tab-sub {
+  color: var(--text-2);
+}
+
+.type-tab-close {
+  display: grid;
+  flex: none;
+  width: 17px;
+  height: 17px;
+  place-items: center;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  opacity: 0;
+  transition: background 0.12s ease, color 0.12s ease, opacity 0.12s ease;
+}
+
+.type-tab:hover .type-tab-close,
+.type-tab-close:focus-visible {
+  opacity: 1;
+}
+
+.type-tab-close:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--text-1);
+}
+
 .type-tab-plus {
   display: grid;
   flex: none;
@@ -1519,6 +1564,116 @@
 .type-tabs-manage:hover {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+/* 设备选择器弹窗 */
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: 46vh;
+  overflow: auto;
+}
+
+.picker-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.picker-group-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 4px;
+  color: var(--text-3);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.picker-group-head strong {
+  color: var(--text-2);
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.picker-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 9px;
+  background: var(--bg-2);
+  color: var(--text-1);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.picker-item:hover {
+  border-color: var(--accent);
+  background: rgba(77, 181, 255, 0.06);
+}
+
+.picker-item .online-dot {
+  flex: none;
+}
+
+.picker-item-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.picker-item-main strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+
+.picker-item-main small {
+  font-size: 10px;
+}
+
+.picker-item-pkg {
+  flex: none;
+  max-width: 180px;
+  overflow: hidden;
+  padding: 2px 8px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-3);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-item-arrow {
+  flex: none;
+  color: var(--text-3);
+}
+
+.picker-empty {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 22px 0;
+  color: var(--text-3);
+  font-size: 12px;
 }
 
 .ws-head {
@@ -1593,10 +1748,6 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-}
-
-.ws-device-select {
-  width: 230px;
 }
 
 .ws-empty {
@@ -2201,12 +2352,6 @@
 
   .ws-actions {
     width: 100%;
-  }
-
-  .ws-device-select {
-    flex: 1;
-    width: auto;
-    min-width: 180px;
   }
 
   .page-editor {

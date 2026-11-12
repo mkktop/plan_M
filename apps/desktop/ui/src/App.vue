@@ -1,15 +1,16 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { darkTheme, dateZhCN, zhCN, type GlobalThemeOverrides } from 'naive-ui'
 import AppIcon from '@/components/AppIcon.vue'
 import ConnectionPill from '@/components/ConnectionPill.vue'
-import DeviceTypeTabs from '@/components/DeviceTypeTabs.vue'
+import DeviceTabs from '@/components/DeviceTabs.vue'
 import ToastStack from '@/components/ToastStack.vue'
 import WindowControls from '@/components/WindowControls.vue'
 import { gateway, isTauriRuntime, resolveGatewaySettings } from '@/api/ws'
 import { installGatewayBridge } from '@/api/bridge'
 import { pluginHost } from '@/plugins/host'
+import { useDeviceTabsStore } from '@/stores/deviceTabs'
 import { useProjectStore } from '@/stores/project'
 import { useWorkspacesStore } from '@/stores/workspaces'
 import { pagesForPackage } from '@/utils/devicePages'
@@ -19,6 +20,7 @@ const route = useRoute()
 const router = useRouter()
 const project = useProjectStore()
 const workspaces = useWorkspacesStore()
+const deviceTabs = useDeviceTabsStore()
 
 interface NavItem {
   path: string
@@ -37,13 +39,14 @@ const baseNav: NavItem[] = [
   { path: '/settings', label: '设置', desc: '连接与更新', icon: 'settings' },
 ]
 
-const activeTypeId = computed(() =>
-  typeof route.params.typeId === 'string' ? route.params.typeId : '',
+const activeDeviceId = computed(() =>
+  typeof route.params.deviceId === 'string' ? route.params.deviceId : '',
 )
-const inDeviceWorkspace = computed(() => Boolean(activeTypeId.value))
-const activePackage = computed(() =>
-  activeTypeId.value ? project.packageById.get(activeTypeId.value) ?? null : null,
+const activeDevice = computed(
+  () => project.devices.find((d) => d.id === activeDeviceId.value) ?? null,
 )
+const activePackage = computed(() => project.packageOf(activeDevice.value))
+const inDeviceWorkspace = computed(() => Boolean(activeDeviceId.value && activeDevice.value))
 const devicePages = computed(() =>
   activePackage.value
     ? pagesForPackage(activePackage.value, workspaces.get(activePackage.value.id))
@@ -56,23 +59,37 @@ const activePage = computed(
   () => devicePages.value.find((p) => p.id === activePageId.value) ?? devicePages.value[0] ?? null,
 )
 
-// 切页时保留当前设备实例选择。
-const deviceQuery = computed<Record<string, string>>(() => {
-  const out: Record<string, string> = {}
-  const d = route.query.device
-  if (typeof d === 'string' && d) out.device = d
-  return out
-})
+// 当前设备自动打开标签；设备被删除时清掉标签并离开该工作区。
+watch(
+  activeDeviceId,
+  (id) => {
+    if (id) deviceTabs.open(id)
+  },
+  { immediate: true },
+)
 
-// 设备模式：左侧是类型页面；系统模式：全局页面 + 插件导航页。
+watch(
+  () => project.devices.map((d) => d.id).join(','),
+  () => {
+    deviceTabs.prune(new Set(project.devices.map((d) => d.id)))
+    const current = activeDeviceId.value
+    if (current && !project.devices.some((d) => d.id === current)) {
+      const next = deviceTabs.openIds[0]
+      void router.replace(next ? `/d/${next}` : '/devices')
+    }
+  },
+)
+
+// 设备模式：左侧是该设备的页面；系统模式：全局页面 + 插件导航页。
 const nav = computed<NavItem[]>(() => {
-  if (inDeviceWorkspace.value) {
+  const device = activeDevice.value
+  if (device) {
     return devicePages.value.map((page) => ({
-      path: `/t/${activeTypeId.value}/${page.id}`,
+      path: `/d/${device.id}/${page.id}`,
       label: page.title,
       desc: '设备页面',
       icon: page.icon || 'grid',
-      query: deviceQuery.value,
+      query: undefined,
     }))
   }
   return [
@@ -121,16 +138,15 @@ const themeOverrides: GlobalThemeOverrides = {
 }
 
 const title = computed(() => {
-  if (activePackage.value) {
-    return activePage.value
-      ? `${activePackage.value.name} · ${activePage.value.title}`
-      : activePackage.value.name
+  if (inDeviceWorkspace.value && activeDevice.value) {
+    const deviceName = activeDevice.value.name || activeDevice.value.id
+    return activePage.value ? `${deviceName} · ${activePage.value.title}` : deviceName
   }
   return (route.meta.title as string | undefined) ?? '首页'
 })
 const kicker = computed(() =>
-  activePackage.value
-    ? `设备工作区 · ${activePackage.value.vendor || activePackage.value.id}`
+  inDeviceWorkspace.value && activePackage.value
+    ? `设备工作区 · ${activePackage.value.name}`
     : '工业数据采集 · 上位机平台',
 )
 const clock = computed(() =>
@@ -180,10 +196,12 @@ onBeforeUnmount(() => {
       </header>
 
       <aside class="rail">
-        <div v-if="inDeviceWorkspace" class="rail-context">
-          <span class="rail-context-label">设备类型</span>
-          <strong>{{ activePackage?.name || activeTypeId }}</strong>
-          <span class="mono muted small">{{ activeTypeId }}</span>
+        <div v-if="inDeviceWorkspace && activeDevice" class="rail-context">
+          <span class="rail-context-label">当前设备</span>
+          <strong>{{ activeDevice.name || activeDevice.id }}</strong>
+          <span class="mono muted small">
+            #{{ activeDevice.slave }} · {{ activePackage?.name || activeDevice.id }}
+          </span>
         </div>
 
         <nav class="nav">
@@ -228,7 +246,7 @@ onBeforeUnmount(() => {
       </aside>
 
       <div class="main">
-        <DeviceTypeTabs />
+        <DeviceTabs />
 
         <main class="content">
           <router-view />
