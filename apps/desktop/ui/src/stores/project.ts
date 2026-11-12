@@ -134,6 +134,10 @@ export const useProjectStore = defineStore('project', () => {
     await command({ type: 'importPackage', path })
   }
 
+  async function removePackage(id: string): Promise<void> {
+    await command({ type: 'removePackage', id })
+  }
+
   return {
     channels,
     devices,
@@ -160,5 +164,6 @@ export const useProjectStore = defineStore('project', () => {
     addDevice,
     removeDevice,
     importPackage,
+    removePackage,
   }
 })

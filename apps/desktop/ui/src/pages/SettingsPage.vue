@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { NButton, NInput } from 'naive-ui'
 import PageHeader from '@/components/PageHeader.vue'
 import AppIcon from '@/components/AppIcon.vue'
+import ModalShell from '@/components/ModalShell.vue'
 import { gateway, isTauriRuntime } from '@/api/ws'
 import { useConnectionStore } from '@/stores/connection'
 import { useToastStore } from '@/stores/toast'
@@ -14,6 +15,78 @@ const updates = useUpdatesStore()
 
 // 模板里统一走这层别名（Volar 对 class 实例上的 reactive 字段做 ref 解包时类型会跑偏）。
 const gs = gateway.state
+
+// —— 数据目录（仅桌面版：查看/迁移）——
+
+interface StorageInfo {
+  dataDir: string
+  isDefault: boolean
+  defaultDataDir: string
+  configPath: string
+  gatewaydManaged: boolean
+}
+
+const storage = ref<StorageInfo | null>(null)
+const storageLoading = ref(false)
+const migrating = ref(false)
+const migrateTarget = ref('')
+const migrateConfirmOpen = ref(false)
+
+const canMigrate = computed(
+  () => isTauriRuntime() && storage.value !== null && storage.value.gatewaydManaged,
+)
+
+async function loadStorage(): Promise<void> {
+  if (!isTauriRuntime()) return
+  storageLoading.value = true
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    storage.value = await invoke<StorageInfo>('get_storage_info')
+  } catch (e) {
+    // 展示层失败不阻断设置页
+    storage.value = null
+    console.warn('读取存储信息失败', e)
+  } finally {
+    storageLoading.value = false
+  }
+}
+
+async function pickDataDir(): Promise<void> {
+  if (!canMigrate.value) return
+  try {
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    const picked = await open({
+      multiple: false,
+      directory: true,
+      title: '选择新的数据目录（必须为空）',
+    })
+    if (typeof picked === 'string' && picked) {
+      migrateTarget.value = picked
+      migrateConfirmOpen.value = true
+    }
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : String(e))
+  }
+}
+
+async function confirmMigrate(): Promise<void> {
+  if (!migrateTarget.value) return
+  migrating.value = true
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    storage.value = await invoke<StorageInfo>('migrate_data_dir', {
+      newDir: migrateTarget.value,
+    })
+    migrateConfirmOpen.value = false
+    toast.success('数据目录已迁移，原目录保留作备份')
+    // gatewayd 已在新目录重启；重连后快照/订阅自动恢复
+    await conn.reconnect()
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    migrating.value = false
+  }
+}
 
 // —— 连接设置（从诊断页迁移过来）——
 
@@ -87,6 +160,7 @@ const downloadSizeText = computed(() => {
 
 onMounted(() => {
   void updates.loadVersion()
+  void loadStorage()
 })
 </script>
 
@@ -161,6 +235,51 @@ onMounted(() => {
         <AppIcon name="alert" :size="16" />
         <span>尚未配置 token。启动 <code>gatewayd serve</code> 后从数据目录读取 token 填入。</span>
       </div>
+    </section>
+
+    <section class="card settings-card">
+      <div class="card-head">
+        <h3>数据目录</h3>
+        <span class="muted small">通道 / 设备 / 仪表盘 / 设备包 / 插件存放的位置</span>
+      </div>
+
+      <template v-if="isDesktop">
+        <dl class="kv-list">
+          <div class="kv">
+            <dt>当前目录</dt>
+            <dd class="mono ellipsis" :title="storage?.dataDir">
+              {{ storage?.dataDir || gs.info?.dataDir || '…' }}
+            </dd>
+          </div>
+          <div class="kv">
+            <dt>位置</dt>
+            <dd>
+              <span v-if="!storage" class="muted">{{ storageLoading ? '读取中…' : '未知' }}</span>
+              <span v-else-if="storage.isDefault" class="muted">默认（未迁移过）</span>
+              <span v-else class="text-good">已自定义</span>
+            </dd>
+          </div>
+          <div v-if="storage" class="kv">
+            <dt>设置文件</dt>
+            <dd class="mono ellipsis" :title="storage.configPath">{{ storage.configPath }}</dd>
+          </div>
+        </dl>
+
+        <div class="form-actions">
+          <n-button size="small" :loading="migrating" :disabled="!canMigrate" @click="pickDataDir">
+            <template #icon><AppIcon name="folder" :size="15" /></template>
+            迁移数据目录…
+          </n-button>
+        </div>
+        <p v-if="storage && !storage.gatewaydManaged" class="hint">
+          当前 gatewayd 不是本应用拉起的（外部实例或未运行），迁移前请先关闭它并重开应用。
+        </p>
+        <p class="hint">
+          迁移会复制全部数据（不含运行日志）到新目录并重启采集服务；<strong>原目录保留作备份</strong>，
+          目标目录必须为空。
+        </p>
+      </template>
+      <p v-else class="hint mb-0">浏览器调试模式不支持迁移数据目录；当前目录见「连接」卡片。</p>
     </section>
 
     <section class="card settings-card">
@@ -259,5 +378,35 @@ onMounted(() => {
         </p>
       </div>
     </section>
+
+    <ModalShell
+      v-if="migrateConfirmOpen"
+      title="迁移数据目录"
+      subtitle="复制数据并重启采集服务"
+      :width="560"
+      @close="migrateConfirmOpen = false"
+    >
+      <div class="migrate-paths">
+        <div class="migrate-path">
+          <span class="muted small">当前</span>
+          <code class="mono">{{ storage?.dataDir }}</code>
+        </div>
+        <div class="migrate-path">
+          <span class="muted small">迁移到</span>
+          <code class="mono">{{ migrateTarget }}</code>
+        </div>
+      </div>
+      <ul class="migrate-notes muted small">
+        <li>复制通道 / 设备 / 仪表盘 / 工作区 / 设备包 / 插件（不含运行日志）</li>
+        <li>迁移期间采集服务会短暂重启，页面自动重连</li>
+        <li>原目录原样保留作备份，确认无误后可自行删除</li>
+      </ul>
+      <template #footer>
+        <n-button size="small" :disabled="migrating" @click="migrateConfirmOpen = false">取消</n-button>
+        <n-button size="small" type="primary" :loading="migrating" @click="confirmMigrate">
+          开始迁移
+        </n-button>
+      </template>
+    </ModalShell>
   </div>
 </template>

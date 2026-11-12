@@ -2084,6 +2084,37 @@
   margin-top: 14px;
 }
 
+.migrate-paths {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.migrate-path {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--bg-1);
+}
+
+.migrate-path code {
+  word-break: break-all;
+  color: var(--text-1);
+  font-size: 12px;
+}
+
+.migrate-notes {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .update-progress {
   display: flex;
   align-items: center;

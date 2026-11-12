@@ -27,6 +27,25 @@ pub struct GatewaySupervisor {
 /// 由 `.manage()` 注入；回收需要 `&mut`，所以套 Mutex。
 pub struct SupervisorState(pub Mutex<GatewaySupervisor>);
 
+impl SupervisorState {
+    /// gatewayd 是否本应用拉起（迁移数据目录要求可安全重启）。
+    pub fn is_managed(&self) -> bool {
+        self.0.lock().unwrap().child.is_some()
+    }
+
+    pub fn shutdown(&self) {
+        self.0.lock().unwrap().shutdown();
+    }
+
+    /// 停掉当前实例并以新数据目录重新拉起（迁移数据目录用）。
+    pub fn restart(&self, port: u16, data_dir: PathBuf) -> Result<(), String> {
+        let mut guard = self.0.lock().unwrap();
+        guard.shutdown();
+        *guard = GatewaySupervisor::ensure(port, data_dir)?;
+        Ok(())
+    }
+}
+
 /// 端口探测用 TCP 连接即可：gatewayd 的 HTTP/WS 都监听这个端口。
 fn port_open(port: u16) -> bool {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
@@ -45,13 +64,14 @@ fn find_gatewayd() -> Option<PathBuf> {
 }
 
 impl GatewaySupervisor {
-    pub fn ensure(port: u16) -> Result<Self, String> {
-        Self::ensure_with(port, find_gatewayd)
+    pub fn ensure(port: u16, data_dir: PathBuf) -> Result<Self, String> {
+        Self::ensure_with(port, data_dir, find_gatewayd)
     }
 
     /// `locate` 注入 gatewayd.exe 路径，便于单测模拟「找不到二进制」。
     pub fn ensure_with(
         port: u16,
+        data_dir: PathBuf,
         locate: impl FnOnce() -> Option<PathBuf>,
     ) -> Result<Self, String> {
         if port_open(port) {
@@ -63,6 +83,8 @@ impl GatewaySupervisor {
         let mut command = Command::new(&exe);
         command
             .arg("serve")
+            .arg("--data-dir")
+            .arg(&data_dir)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -113,14 +135,14 @@ mod tests {
         // 端口上已有服务（这里用一个裸 TCP 监听模拟）→ 附着、不持有子进程
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let supervisor = GatewaySupervisor::ensure_with(port, || None).unwrap();
+        let supervisor = GatewaySupervisor::ensure_with(port, PathBuf::from("."), || None).unwrap();
         assert!(supervisor.child.is_none());
     }
 
     #[test]
     fn missing_binary_is_reported_without_spawning() {
         // 端口 1 通常无监听且不会被占用成服务；找不到二进制必须报错而不是卡启动等待
-        let err = GatewaySupervisor::ensure_with(1, || None)
+        let err = GatewaySupervisor::ensure_with(1, PathBuf::from("."), || None)
             .err()
             .expect("missing binary should fail fast");
         assert!(err.contains("gatewayd.exe"), "unexpected error: {err}");
@@ -131,7 +153,8 @@ mod tests {
         // 附着模式下 shutdown 是空操作，可以安全调用多次
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let mut supervisor = GatewaySupervisor::ensure_with(port, || None).unwrap();
+        let mut supervisor =
+            GatewaySupervisor::ensure_with(port, PathBuf::from("."), || None).unwrap();
         supervisor.shutdown();
         supervisor.shutdown();
         assert!(supervisor.child.is_none());

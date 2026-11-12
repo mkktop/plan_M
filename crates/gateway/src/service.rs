@@ -407,6 +407,38 @@ impl GatewayService {
         packages.list().iter().map(package_dto).collect()
     }
 
+    /// 删除设备包（该 id 的全部版本目录）；有设备在用时拒绝，未安装报错。
+    pub async fn remove_package(&self, id: &str) -> Result<(), String> {
+        if !valid_id(id) {
+            return Err(format!("设备包 id 非法：{id}"));
+        }
+        let in_use = self
+            .config
+            .read()
+            .await
+            .devices
+            .iter()
+            .filter(|d| d.package == id)
+            .count();
+        if in_use > 0 {
+            return Err(format!(
+                "该设备包正被 {in_use} 台设备使用，请先删除这些设备再移除"
+            ));
+        }
+        {
+            let registry = self.packages.read().await;
+            if registry.get(id).is_none() {
+                return Err(format!("设备包 `{id}` 未安装"));
+            }
+        }
+        // 安装布局是 <packages>/<id>/<版本>/，删除整个 id 目录
+        let dir = self.data_dir.join("packages").join(id);
+        std::fs::remove_dir_all(&dir).map_err(|e| format!("删除设备包目录失败：{e}"))?;
+        let registry = PackageRegistry::scan(&self.data_dir.join("packages"));
+        *self.packages.write().await = Arc::new(registry);
+        Ok(())
+    }
+
     // —— UI 插件（ESM 资源由 gatewayd 静态服务，注册表目录为真相源）——
 
     pub async fn ui_plugins(&self) -> Vec<UiPluginDto> {
@@ -437,11 +469,7 @@ impl GatewayService {
 
     /// 删除插件目录并返回最新列表；不存在视为成功（幂等）。
     pub async fn remove_ui_plugin(&self, id: &str) -> Result<Vec<UiPluginDto>, String> {
-        if id.is_empty()
-            || !id
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
-        {
+        if !valid_id(id) {
             return Err(format!("插件 id 非法：{id}"));
         }
         let dir = {
@@ -527,6 +555,15 @@ impl GatewayService {
             .map(|s| s.quality == Quality::Good)
             .unwrap_or(false)
     }
+}
+
+/// 包/插件 id 白名单：字母数字 + `. - _`，且至少含一个字母数字
+/// （挡住空串与 `.` / `..` 这类路径穿越）。
+fn valid_id(id: &str) -> bool {
+    id.chars().any(|c| c.is_ascii_alphanumeric())
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
 }
 
 /// 工程量 → 编码用的原始数值：`raw = (value - offset) / scale`。
@@ -679,6 +716,18 @@ fn device_online_of(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn valid_id_rejects_path_traversal() {
+        assert!(valid_id("com.acme.pm3000"));
+        assert!(valid_id("a"));
+        assert!(!valid_id(""));
+        assert!(!valid_id("."));
+        assert!(!valid_id(".."));
+        assert!(!valid_id("..."));
+        assert!(!valid_id("a/b"));
+        assert!(!valid_id("a\\b"));
+    }
 
     #[test]
     fn write_value_applies_inverse_scale() {

@@ -23,6 +23,8 @@ const importPath = ref('')
 const importing = ref(false)
 const importError = ref('')
 const dragOver = ref(false)
+const removing = ref(false)
+const removeBusy = ref(false)
 
 const selected = computed<PackageDto | null>(() => {
   if (!project.packages.length) return null
@@ -42,6 +44,22 @@ const selectedUsage = computed(() =>
 
 function usageCount(pkgId: string): number {
   return project.devices.filter((d) => d.package === pkgId).length
+}
+
+async function doRemove(): Promise<void> {
+  const p = selected.value
+  if (!p) return
+  removeBusy.value = true
+  try {
+    await project.removePackage(p.id)
+    toast.success(`设备包 ${p.name} 已删除`)
+    removing.value = false
+    selectedId.value = ''
+  } catch (e) {
+    toast.error(`删除失败：${errorMessage(e)}`)
+  } finally {
+    removeBusy.value = false
+  }
 }
 
 function pointTotal(pkg: PackageDto): number {
@@ -233,6 +251,10 @@ onBeforeUnmount(() => {
           <div class="pkg-version">
             <span class="mono">v{{ selected.version }}</span>
             <span class="state-pill idle">{{ selected.driver }}</span>
+            <n-button size="tiny" quaternary type="error" @click="removing = true">
+              <template #icon><AppIcon name="trash" :size="14" /></template>
+              删除
+            </n-button>
           </div>
         </header>
 
@@ -363,6 +385,34 @@ onBeforeUnmount(() => {
       <template #footer>
         <n-button size="small" @click="importOpen = false">取消</n-button>
         <n-button size="small" type="primary" :loading="importing" @click="doImport">导入</n-button>
+      </template>
+    </ModalShell>
+
+    <!-- 删除设备包 -->
+    <ModalShell
+      v-if="removing && selected"
+      title="删除设备包"
+      :width="460"
+      @close="removing = false"
+    >
+      <p>确认删除设备包 <b>{{ selected.name }}</b>（{{ selected.id }}）？</p>
+      <p v-if="selectedUsage > 0" class="banner danger">
+        该包正被 {{ selectedUsage }} 台设备使用，需先到「设备」页删除这些设备。
+      </p>
+      <p class="muted mt-8">
+        会从 gatewayd 数据目录删除该包的全部版本；点表与工作区自定义页面（如有）一并失效。
+      </p>
+      <template #footer>
+        <n-button size="small" @click="removing = false">取消</n-button>
+        <n-button
+          size="small"
+          type="error"
+          :disabled="selectedUsage > 0"
+          :loading="removeBusy"
+          @click="doRemove"
+        >
+          删除
+        </n-button>
       </template>
     </ModalShell>
   </div>

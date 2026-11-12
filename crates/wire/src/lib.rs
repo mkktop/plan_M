@@ -70,6 +70,10 @@ pub enum ClientMsg {
     ImportPackage {
         path: String,
     },
+    /// 删除设备包（该 id 的全部版本）；有设备在用时拒绝
+    RemovePackage {
+        id: String,
+    },
     /// 仪表盘布局（工程数据，持久化在 gatewayd）
     GetDashboards,
     /// 新建/保存仪表盘（同 id 即更新）

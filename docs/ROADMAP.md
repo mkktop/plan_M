@@ -396,7 +396,8 @@ pnpm --dir ui dev                                 # 浏览器调试：?token=<ga
   detached 拉起后退出。7 个单测（版本比较/预发布跳过/清单资产选择/URL 信任/摘要/
   本地 TCP 流式下载）。
 - **UI**：新设置页 `/settings`（连接编辑从诊断页迁入 + 应用与更新：检查/下载进度/安装重启/
-  打开发布页）；`stores/updates.ts` 状态机；诊断页保留状态/健康探测/日志。
+  打开发布页 + **数据目录迁移**：desktop.json 指针、复制数据、重启采集、原目录保留备份）；
+  `stores/updates.ts` 状态机；诊断页保留状态/健康探测/日志。
 - 版本真值 = 根 Cargo.toml workspace version；发版流程 `set-version` → 提交 → tag →
   release.yml → 确认 publish，详见 README「发版与更新」。
 

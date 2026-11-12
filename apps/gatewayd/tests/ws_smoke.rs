@@ -306,6 +306,53 @@ async fn ws_full_protocol_smoke() {
         }
     };
     assert!(left.is_empty(), "删除后应无 UI 插件");
+
+    // 9. 设备包删除：在用时拒绝 → 删除设备后可删 → 快照不再包含该包
+    send(
+        &mut ws,
+        &ClientMsg::RemovePackage {
+            id: "com.acme.pm3000".into(),
+        },
+    )
+    .await;
+    let denied = loop {
+        if let ServerMsg::Error { message } = recv(&mut ws).await {
+            break message;
+        }
+    };
+    assert!(denied.contains("使用"), "在用包应拒绝删除：{denied}");
+
+    for device in ["pm1", "pm2"] {
+        send(
+            &mut ws,
+            &ClientMsg::RemoveDevice {
+                device: device.into(),
+            },
+        )
+        .await;
+        let _ = loop {
+            if let ServerMsg::Snapshot(snap) = recv(&mut ws).await {
+                break snap;
+            }
+        };
+    }
+    send(
+        &mut ws,
+        &ClientMsg::RemovePackage {
+            id: "com.acme.pm3000".into(),
+        },
+    )
+    .await;
+    let snap = loop {
+        if let ServerMsg::Snapshot(snap) = recv(&mut ws).await {
+            break snap;
+        }
+    };
+    assert!(
+        snap.packages.iter().all(|p| p.id != "com.acme.pm3000"),
+        "删除后快照不应再包含示例包"
+    );
+    assert!(snap.devices.is_empty(), "删除包前设备应已清空");
 }
 
 #[tokio::test]

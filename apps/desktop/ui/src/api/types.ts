@@ -221,6 +221,7 @@ export type ClientMsg =
   | { type: 'addDevice'; config: DeviceConfig }
   | { type: 'removeDevice'; device: string }
   | { type: 'importPackage'; path: string }
+  | { type: 'removePackage'; id: string }
   | { type: 'getDashboards' }
   | { type: 'saveDashboard'; dashboard: DashboardDto }
   | { type: 'removeDashboard'; id: string }

@@ -270,6 +270,7 @@ export function mount(el, ctx, props) {
 客户端 → 服务端：`hello{token}` / `getSnapshot` / `subscribe{tags}` / `unsubscribe` /
 `writeTag{tag,value}` / `scanChannel{channel,range}` / `getSerialPorts` / `getPackages` /
 `upsertChannel` / `removeChannel` / `addDevice` / `removeDevice` / `importPackage{path}` /
+`removePackage{id}`（有设备在用时拒绝）/
 `getDashboards` / `saveDashboard{dashboard}` / `removeDashboard{id}` /
 `getUiPlugins` / `importUiPlugin{path}` / `removeUiPlugin{id}` /
 `getWorkspaces` / `saveWorkspace{workspace}` / `removeWorkspace{deviceType}`
@@ -318,6 +319,11 @@ GitHub Actions（与 pika_client 同一套机制）：
 装到同一目录）。**打开即用**：桌面壳启动时自动拉起 gatewayd（后台无窗口），
 退出时自动回收；已有外部 gatewayd 在跑则直接附着。数据目录在
 `%APPDATA%/gatewayd`。
+
+**数据目录**：默认 `%APPDATA%\gatewayd`（Windows 规范位置，升级/卸载不影响数据）。
+不喜欢放 C 盘的用户可在 **设置 → 数据目录** 迁移：选择一个空目录，桌面壳会复制全部
+数据（不含日志）、写入指针并按新目录重启采集服务，**原目录保留作备份**。目录指针存于
+`%APPDATA%\planM\desktop.json`（固定，几十字节；安装向导选盘只影响程序本身）。
 
 **应用内更新**（设置 → 应用与更新）：自研命令而非 tauri-plugin-updater —— 读 Release
 附带的静态清单 `releases/latest/download/latest.json`（不走 api.github.com，避开 60 次/小时

@@ -5,8 +5,10 @@
 ## 结构
 
 ```
-src-tauri/        Tauri 2 薄壳：窗口 + gateway_info（读 %APPDATA%/gatewayd/gateway.token）
+src-tauri/        Tauri 2 薄壳：窗口 + gateway_info（读数据目录下的 gateway.token）
                  + supervisor.rs（gatewayd 进程托管：启动拉起/退出回收，只管自己拉起的）
+                 + desksettings.rs（desktop.json 数据目录指针）
+                 + storage.rs（数据目录查看/迁移命令）
                  + tauri-plugin-dialog（设备包 zip/目录选择）
                  + updates.rs（应用更新：检查/下载/安装/打开发布页）
                  + tauri.release.conf.json（仅 CI 构建叠加：把 gatewayd.exe 打进安装包）
@@ -58,6 +60,9 @@ UI 插件入口由 gatewayd 的 HTTP 静态服务提供（`/plugins/<id>/<entry>
   应用目录 gatewayd.exe → `target/release`（开发模式）。）
 - 新增 wire 消息要同时改 `crates/wire`、`apps/gatewayd/src/serve.rs`、
   `ui/src/api/types.ts`，并补 `ws_smoke` 断言。
+- 设备包/插件删除共用 `valid_id` 白名单（gateway service）：字母数字 + `. - _` 且
+  至少一个字母数字 —— 挡住 `.` / `..` 路径穿越；包删除会清 `<packages>/<id>/` 全部
+  版本，有设备在用时先拒绝。
 - 页面只读 Pinia，不自己解析服务端消息；订阅只覆盖当前可见设备/看板。
 - **设备工作区**：顶部类型标签 = 已安装设备包（一包一类型）；`/t/:typeId/:pageId?` 页面按类型共享，
   `?device=` 选实例。页面由包 `ui.pages` 声明（`overview/dashboard/tags/settings`），
@@ -80,6 +85,11 @@ UI 插件入口由 gatewayd 的 HTTP 静态服务提供（`/plugins/<id>/<entry>
 - **Volar 坑**：模板静态属性里不要放字面量 `ws://…`（会破坏后续表达式类型解包）。
 - **v-model 坑**：`v-model:value` 与 `@update:value` 同时写会互相覆盖（Vue 合并同一监听时的行为）；
   需要“选择后联动”时用 `:value` + `@update:value` 自己赋值（见 DashboardPage 的点位选择）。
+- **数据目录**：默认 `%APPDATA%\gatewayd`，指针存 `%APPDATA%\planM\desktop.json`
+  （`desksettings::resolve_data_dir`：指针 > 默认）。迁移（设置页 → 数据目录）只允许在
+  gatewayd 由本应用托管时执行：停服务 → 复制（跳过 `logs/`）→ 写指针 → 新目录拉起；
+  原目录保留；目标必须为空目录且与当前目录不嵌套。`gateway_info` 与 supervisor
+  拉起共用同一解析，二者永不错位。
 - **设置页**（/settings）：连接（WS 地址/token 编辑，保存走 `gateway.start` 并重连）与
   应用更新两块。更新状态机在 `stores/updates.ts`（idle/checking/downloading/ready/installing），
   命令契约在 `src-tauri/src/updates.rs`（snake_case 字段）：`get_app_version` /

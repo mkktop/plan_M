@@ -474,6 +474,10 @@ impl Session {
                 Ok(_) => Ok(Some(ServerMsg::Snapshot(svc.snapshot().await))),
                 Err(e) => Ok(Some(ServerMsg::Error { message: e })),
             },
+            ClientMsg::RemovePackage { id } => match svc.remove_package(&id).await {
+                Ok(()) => Ok(Some(ServerMsg::Snapshot(svc.snapshot().await))),
+                Err(e) => Ok(Some(ServerMsg::Error { message: e })),
+            },
             ClientMsg::GetDashboards => Ok(Some(ServerMsg::Dashboards {
                 dashboards: svc.dashboards().await,
             })),
