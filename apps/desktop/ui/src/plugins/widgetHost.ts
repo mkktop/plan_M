@@ -7,12 +7,15 @@
 //!
 //! 槽位订阅按「可见性 + tag 引用计数」管理：不可见时退订，进入视口（提前 200px）再补。
 
+import { effectiveWidgetConfig } from '@/utils/widgetConfig'
+import { effectivePoint, numericTagValue } from '@/utils/devicePoints'
 import { gateway } from '@/api/ws'
 import { useProjectStore } from '@/stores/project'
 import { useTagsStore } from '@/stores/tags'
 import { useToastStore } from '@/stores/toast'
 import { bindingDecls, resolveBoundTag } from '@/utils/devicePages'
 import { boolOf, primitiveOf } from '@/utils/format'
+import { isDark } from '@/utils/theme'
 import type {
   BindingDecl,
   DevicePageComponentDto,
@@ -23,19 +26,26 @@ import type {
 } from '@/api/types'
 import type { ExternalWidgetDescriptor } from './deviceWidgets'
 
-// —— 主题 token（与宿主 UI 的颜色保持一致）——
+// —— 主题 token（运行时从 tokens.css 的 CSS 变量读取，跟随宿主深浅主题）——
 
-const TOKENS: Record<string, string> = {
-  'color.bg': '#0a0d12',
-  'color.panel': 'rgba(255, 255, 255, 0.035)',
-  'color.text': '#e8eef7',
-  'color.textMuted': '#8494a8',
-  'color.accent': '#4db5ff',
-  'color.good': '#35d399',
-  'color.bad': '#ff6b6b',
-  'color.warn': '#f5b942',
-  'color.border': '#26313f',
-  'font.mono': 'ui-monospace, "Cascadia Mono", Consolas, monospace',
+function cssToken(name: string, fallback: string): string {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+  return v || fallback
+}
+
+function currentTokens(): Record<string, string> {
+  return {
+    'color.bg': cssToken('--bg-0', '#0a0d12'),
+    'color.panel': cssToken('--inset-bg', 'rgba(255, 255, 255, 0.035)'),
+    'color.text': cssToken('--text-1', '#e8eef7'),
+    'color.textMuted': cssToken('--text-3', '#8494a8'),
+    'color.accent': cssToken('--accent', '#4db5ff'),
+    'color.good': cssToken('--good', '#35d399'),
+    'color.bad': cssToken('--bad', '#ff6b6b'),
+    'color.warn': cssToken('--warn', '#f5b942'),
+    'color.border': cssToken('--line', '#26313f'),
+    'font.mono': cssToken('--font-mono', 'ui-monospace, "Cascadia Mono", Consolas, monospace'),
+  }
 }
 
 const HOST_CSS = `
@@ -51,19 +61,21 @@ const HOST_CSS = `
 `
 
 function hostCssVars(): string {
+  // 引用文档级 CSS 变量：自定义属性可穿透 shadow 边界继承，
+  // 宿主切换深浅主题时挂载中的组件实时跟随（末尾给具体值兜底）。
   return `
 :host {
-  --pm-color-bg: ${TOKENS['color.bg']};
-  --pm-color-panel: ${TOKENS['color.panel']};
-  --pm-color-text: ${TOKENS['color.text']};
-  --pm-color-text-muted: ${TOKENS['color.textMuted']};
-  --pm-color-accent: ${TOKENS['color.accent']};
-  --pm-color-good: ${TOKENS['color.good']};
-  --pm-color-bad: ${TOKENS['color.bad']};
-  --pm-color-warn: ${TOKENS['color.warn']};
-  --pm-color-border: ${TOKENS['color.border']};
+  --pm-color-bg: var(--bg-0, #0a0d12);
+  --pm-color-panel: var(--inset-bg, rgba(255, 255, 255, 0.035));
+  --pm-color-text: var(--text-1, #e8eef7);
+  --pm-color-text-muted: var(--text-3, #8494a8);
+  --pm-color-accent: var(--accent, #4db5ff);
+  --pm-color-good: var(--good, #35d399);
+  --pm-color-bad: var(--bad, #ff6b6b);
+  --pm-color-warn: var(--warn, #f5b942);
+  --pm-color-border: var(--line, #26313f);
   --pm-font: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  --pm-font-mono: ${TOKENS['font.mono']};
+  --pm-font-mono: var(--font-mono, ui-monospace, "Cascadia Mono", Consolas, monospace);
 }
 `
 }
@@ -110,6 +122,7 @@ export interface WidgetHost {
 interface MetaHit {
   meta: PointMeta
   point: PointDto
+  bit?: number
 }
 
 /** tag → PointMeta（设备点；`$` 系统 tag 暂不支持槽位）。 */
@@ -120,8 +133,9 @@ function resolveMeta(tag: string, fallbackPkg?: PackageDto | null): MetaHit | nu
   const project = useProjectStore()
   const device = project.devices.find((d) => d.id === deviceId)
   const pkg = (device ? project.packageById.get(device.package) : null) ?? fallbackPkg ?? null
-  const point = pkg?.points.find((p) => p.id === pointId)
-  if (!point) return null
+  const definition = pkg?.points.find((p) => p.id === pointId)
+  if (!definition) return null
+  const point = effectivePoint(device, definition)
   const bit = bitId?.startsWith('b') ? point.bits.find((b) => `b${b.bit}` === bitId) : undefined
   if (bitId && !bit) return null
 
@@ -155,7 +169,7 @@ function resolveMeta(tag: string, fallbackPkg?: PackageDto | null): MetaHit | nu
         }))
       : undefined,
   }
-  return { meta, point }
+  return { meta, point, bit: bit?.bit }
 }
 
 // —— 实时值总线（单条 onMessage 监听，按 tag 分发）——
@@ -314,7 +328,7 @@ export interface MountExternalOptions {
 
 export interface WidgetInstance {
   /** 返回 true = 已原地 update；false = 需要调用方重挂 */
-  update(): boolean
+  update(component: DevicePageComponentDto): boolean
   dispose(): void
 }
 
@@ -347,18 +361,13 @@ function canRead(perms: Set<string>): boolean {
   return perms.has('tags:read') || perms.has('tags:subscribe')
 }
 
-function numericTagValue(point: PointDto, v: number): TagValue {
-  if (point.area === 'coil' || point.area === 'discrete') return { bool: v !== 0 }
-  if (point.type === 'f32' || point.type === 'f64') return { f64: v }
-  return { i64: Math.round(v) }
-}
-
 async function writeTag(tag: string, value: TagValue): Promise<void> {
   await gateway.request({ type: 'writeTag', tag, value }, ['commandOk', 'error'], 8000)
 }
 
 export async function mountExternalWidget(opts: MountExternalOptions): Promise<WidgetInstance> {
-  const { descriptor, component, deviceId, mode = 'view' } = opts
+  const { descriptor, deviceId, mode = 'view' } = opts
+  let component = opts.component
   const pkg = opts.pkg ?? null
   const mod = await importModule(descriptor.moduleUrl)
 
@@ -396,7 +405,7 @@ export async function mountExternalWidget(opts: MountExternalOptions): Promise<W
   shadow.append(style, rootEl)
 
   const perms = permissionSet(descriptor)
-  const slotTags = slotTagsOf(deviceId, component.bind)
+  let slotTags = slotTagsOf(deviceId, component.bind)
   const channels = new Map<string, SlotChannel>()
   for (const slot of new Set([
     ...Object.keys(descriptor.bindings ?? {}),
@@ -410,7 +419,7 @@ export async function mountExternalWidget(opts: MountExternalOptions): Promise<W
   const state = {
     visible: true,
     disposed: false,
-    config: (component.config ?? {}) as Record<string, unknown>,
+    config: effectiveWidgetConfig(descriptor.configSchema, descriptor.config, component.config),
   }
 
   function requireRead(): void {
@@ -485,13 +494,13 @@ export async function mountExternalWidget(opts: MountExternalOptions): Promise<W
         if (!hit) throw new Error(`无法解析 ${target} 的点表元数据`)
         if (hit.point.access !== 'rw') throw new Error(`点 ${hit.point.name} 只读，写入被拒绝`)
 
-        if (decl.bit === null || decl.bit === undefined) {
+        if (hit.bit === undefined) {
           validateWriteValue(hit.point, value)
           await writeTag(target, value)
           return
         }
         // 位写：读父点整字 → 改位 → 写回（带 scale/offset 时拒绝，避免写错原始位域）
-        const parentTag = resolveBoundTag(deviceId, { point: decl.point ?? undefined })
+        const parentTag = target.slice(0, target.lastIndexOf('.'))
         if (
           (hit.point.scale != null && hit.point.scale !== 1) ||
           (hit.point.offset != null && hit.point.offset !== 0)
@@ -500,15 +509,15 @@ export async function mountExternalWidget(opts: MountExternalOptions): Promise<W
         }
         const current = useTagsStore().get(parentTag)
         const num = primitiveOf(current?.value)
-        if (typeof num !== 'number') throw new Error('还没有读到父点当前值，稍后再试')
+        if (typeof num !== 'number' || current?.quality !== 'good') throw new Error('还没有读到父点当前值，稍后再试')
         const bitOn = 'bool' in value ? value.bool : Number(primitiveOf(value)) !== 0
-        const next = bitOn ? num | (1 << decl.bit) : num & ~(1 << decl.bit)
+        const next = bitOn ? num | (1 << hit.bit) : num & ~(1 << hit.bit)
         await writeTag(parentTag, numericTagValue(hit.point, next))
       },
     },
     theme: {
-      token: (name) => TOKENS[name] ?? '',
-      mode: () => 'dark',
+      token: (name) => currentTokens()[name] ?? '',
+      mode: () => (isDark.value ? 'dark' : 'light'),
     },
     notify(message, kind = 'info') {
       if (!perms.has('notify')) {
@@ -568,19 +577,15 @@ export async function mountExternalWidget(opts: MountExternalOptions): Promise<W
   }
 
   return {
-    update(): boolean {
+    update(nextComponent): boolean {
       if (state.disposed) return true
       const updateFn = mod.update
       if (typeof updateFn !== 'function') return false
-      state.config = (component.config ?? {}) as Record<string, unknown>
-      const next = slotTagsOf(deviceId, component.bind)
-      for (const [slot, tags] of Object.entries(next)) {
-        let ch = channels.get(slot)
-        if (!ch) {
-          ch = new SlotChannel(pkg)
-          channels.set(slot, ch)
-        }
-        ch.setTags(tags)
+      component = nextComponent
+      state.config = effectiveWidgetConfig(descriptor.configSchema, descriptor.config, component.config)
+      slotTags = slotTagsOf(deviceId, component.bind)
+      for (const slot of new Set([...channels.keys(), ...Object.keys(slotTags)])) {
+        channel(slot).setTags(slotTags[slot] ?? [])
       }
       try {
         ;(updateFn as (host: WidgetHost) => void)(host)
@@ -685,7 +690,7 @@ function mountLegacy(opts: LegacyOptions): WidgetInstance {
       else if (kind === 'error') toast.error(message)
       else toast.info(message)
     },
-    theme: { get: () => 'dark' as const },
+    theme: { get: () => (isDark.value ? ('dark' as const) : ('light' as const)) },
     log(...args: unknown[]) {
       console.info(`[widget ${descriptor.kind}]`, ...args)
     },
@@ -699,7 +704,7 @@ function mountLegacy(opts: LegacyOptions): WidgetInstance {
       title: component.title || descriptor.title,
       tag: firstTag,
       unit: meta?.unit ?? '',
-      config: component.config ?? {},
+      config: effectiveWidgetConfig(descriptor.configSchema, descriptor.config, component.config),
     },
     editing: mode === 'edit',
   })

@@ -1,209 +1,131 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { useRouter } from 'vue-router'
-import { NButton } from 'naive-ui'
+import { computed, ref } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
+import MetricCard from '@/components/MetricCard.vue'
+import PageHeader from '@/components/PageHeader.vue'
 import { useConnectionStore } from '@/stores/connection'
-import { usePluginsStore } from '@/stores/plugins'
 import { useProjectStore } from '@/stores/project'
-import { useTagsStore } from '@/stores/tags'
-import { nowMs } from '@/utils/clock'
-import { addressLabel } from '@/utils/transport'
-import { formatClock } from '@/utils/format'
+import { addressLabel, channelStatus, transportLabel } from '@/utils/transport'
 
-const router = useRouter()
 const conn = useConnectionStore()
 const project = useProjectStore()
-const plugins = usePluginsStore()
-const tags = useTagsStore()
 
-const greeting = computed(() => {
-  const h = new Date(nowMs.value).getHours()
-  if (h < 5) return '夜深了'
-  if (h < 11) return '早上好'
-  if (h < 14) return '中午好'
-  if (h < 18) return '下午好'
-  return '晚上好'
+const channels = computed(() => project.channels.map((channel) => {
+  const state = project.channelStates[channel.id] ?? channel.state
+  return { ...channel, state, status: channelStatus(state) }
+}).sort((a, b) => project.live ? Number(a.state === 'running') - Number(b.state === 'running') : 0))
+const runningCount = computed(() => channels.value.filter((channel) => channel.state === 'running').length)
+const offlineCount = computed(() => project.devices.length - project.onlineDeviceCount)
+const deviceFilter = ref<'all' | 'offline' | null>(null)
+const activeFilter = computed(() => project.live ? deviceFilter.value ?? (offlineCount.value ? 'offline' : 'all') : 'all')
+const devices = computed(() => {
+  const all = activeFilter.value === 'offline'
+    ? project.devices.filter((device) => !device.online)
+    : project.devices
+  return all.slice(0, 5)
 })
 
-const clockText = computed(() => formatClock(nowMs.value))
-const dateText = computed(() =>
-  new Date(nowMs.value).toLocaleDateString('zh-CN', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    weekday: 'long',
-  }),
-)
-
-const runningChannels = computed(
-  () => project.channels.filter((c) => project.channelStates[c.id] === 'running').length,
-)
-
-const stats = computed(() => [
-  {
-    label: '在线设备',
-    value: `${project.onlineDeviceCount}/${project.devices.length}`,
-    hint: '当前轮询正常',
-    icon: 'chip',
-  },
-  {
-    label: '采集通道',
-    value: `${runningChannels.value}/${project.channels.length}`,
-    hint: '运行中 / 已配置',
-    icon: 'plug',
-  },
-  {
-    label: '点位',
-    value: String(project.totalPointCount),
-    hint: `${tags.values.size} 个实时值已缓存`,
-    icon: 'grid',
-  },
-  {
-    label: '设备包',
-    value: String(project.packages.length),
-    hint: '已安装型号',
-    icon: 'package',
-  },
-  {
-    label: 'UI 插件',
-    value: String(plugins.list.length),
-    hint: 'ESM 扩展',
-    icon: 'plugin',
-  },
-])
-
-const actions = [
-  { path: '/devices', label: '管理设备', desc: '总线、从站与扫描', icon: 'chip' },
-  { path: '/diagnostics?tab=data', label: '数据浏览', desc: '跨设备实时值、质量与写值', icon: 'grid' },
-  { path: '/packages', label: '设备包', desc: '导入新型号与点表', icon: 'package' },
-  { path: '/plugins', label: 'UI 插件', desc: '扩展仪表盘组件与页面', icon: 'plugin' },
-]
-
-const recentDevices = computed(() => project.devices.slice(0, 5))
-
-function packageName(id: string): string {
-  return project.packageById.get(id)?.name ?? id
-}
+const endpoint = computed(() => {
+  try {
+    return new URL(conn.state.url || conn.state.settings.wsUrl).host
+  } catch {
+    return '—'
+  }
+})
 </script>
 
 <template>
   <div class="page home-page">
-    <section class="home-hero">
-      <div class="home-hero-main">
-        <span class="home-kicker">PLAN M · INDUSTRIAL HMI</span>
-        <h2 class="home-hello">Hello<span class="home-hello-dot">.</span></h2>
-        <p class="home-sub">
-          {{ greeting }}，今天是 {{ dateText }}。
-          <template v-if="conn.connected">
-            采集链路正常，{{ project.onlineDeviceCount }} 台设备在线。
-          </template>
-          <template v-else>正在等待 gatewayd 连接，采集进程未就绪。</template>
-        </p>
-        <div class="home-hero-actions">
-          <n-button size="medium" type="primary" @click="router.push('/devices')">
-            <template #icon><AppIcon name="chip" :size="16" /></template>
-            管理设备
-          </n-button>
-          <n-button size="medium" @click="router.push('/diagnostics?tab=data')">
-            <template #icon><AppIcon name="grid" :size="16" /></template>
-            数据浏览
-          </n-button>
-        </div>
-      </div>
+    <PageHeader title="运行总览" subtitle="查看采集链路、设备在线情况与实时点位">
+      <router-link class="action-link primary" :to="project.loaded && !project.devices.length ? '/devices?add=1' : '/devices'">
+        <AppIcon name="chip" :size="16" /> {{ project.loaded && !project.devices.length ? '接入设备' : '管理设备' }}
+      </router-link>
+    </PageHeader>
 
-      <div class="home-hero-side">
-        <div class="home-status">
-          <span class="status-orb" :class="conn.state.status" />
-          <div class="home-status-text">
-            <strong>{{ conn.statusLabel }}</strong>
-            <span class="mono">{{ conn.state.url || conn.state.settings.wsUrl }}</span>
+    <section class="card home-gateway" aria-label="采集网关">
+      <span class="inventory-icon"><AppIcon name="server" :size="20" /></span>
+      <div class="gateway-identity">
+        <h3>采集网关</h3>
+        <span class="mono muted small">{{ endpoint }}</span>
+      </div>
+      <span class="state-pill" :class="project.live ? 'ok' : 'warn'">
+        {{ conn.connected && !project.live ? '同步中' : conn.statusLabel }}
+      </span>
+      <span v-if="conn.connected && conn.uptimeMs" class="muted small">已连接 {{ conn.uptimeText }}</span>
+      <router-link to="/diagnostics" class="panel-link">
+        查看连接诊断 <AppIcon name="arrowRight" :size="15" />
+      </router-link>
+    </section>
+
+    <section class="metric-grid" aria-label="运行指标">
+      <MetricCard label="在线设备" :value="project.live ? project.onlineDeviceCount : '—'"
+        :total="project.loaded ? project.devices.length : undefined"
+        :detail="project.live ? `${offlineCount} 台离线` : '等待网关状态'"
+        icon="chip" :tone="project.live && offlineCount ? 'amber' : 'blue'" :to="project.live && offlineCount ? '/devices?status=offline' : '/devices'" />
+      <MetricCard label="运行通道" :value="project.live ? runningCount : '—'"
+        :total="project.loaded ? channels.length : undefined" detail="运行中的通道"
+        icon="network" tone="blue" to="/devices" />
+      <MetricCard label="配置采集点" :value="project.loaded ? project.totalPointCount : '—'"
+        detail="按设备统计 · 含位展开子点" icon="chart" tone="amber" to="/diagnostics?tab=data" />
+      <MetricCard label="已安装设备包" :value="project.loaded ? project.packages.length : '—'"
+        detail="查看设备型号与点表" icon="package" tone="violet" to="/packages" />
+    </section>
+
+    <div class="home-grid">
+      <section class="card home-inventory">
+        <header class="home-panel-header">
+          <div><h3>设备概览</h3><p>{{ project.loaded ? `${project.devices.length} 台已配置设备` : '等待设备清单' }}</p></div>
+          <router-link class="panel-link" to="/devices">全部设备 <AppIcon name="arrowRight" :size="14" /></router-link>
+        </header>
+        <div v-if="project.devices.length" class="inventory-toolbar">
+          <div class="filter-chips" aria-label="筛选设备">
+            <button type="button" class="filter-chip" :class="{ active: activeFilter === 'all' }"
+              :aria-pressed="activeFilter === 'all'" @click="deviceFilter = 'all'">全部</button>
+            <button type="button" class="filter-chip" :class="{ active: activeFilter === 'offline' }"
+              :aria-pressed="activeFilter === 'offline'" :disabled="!project.live"
+              @click="deviceFilter = 'offline'">离线 {{ project.live ? offlineCount : '—' }}</button>
           </div>
-          <span class="state-pill" :class="conn.connected ? 'ok' : 'idle'">
-            v{{ conn.state.hostVersion || '0.1.0' }}
-          </span>
+          <span v-if="devices.length" class="muted small">显示 {{ devices.length }} 台</span>
         </div>
-        <div class="home-clock mono">{{ clockText }}</div>
-        <div class="home-date">{{ dateText }}</div>
-      </div>
-
-      <div class="home-orbit" aria-hidden="true">
-        <span /><span /><span />
-      </div>
-    </section>
-
-    <section class="home-stats">
-      <article v-for="s in stats" :key="s.label" class="home-stat">
-        <div class="home-stat-head">
-          <span>{{ s.label }}</span>
-          <AppIcon :name="s.icon" :size="15" />
-        </div>
-        <strong class="mono">{{ s.value }}</strong>
-        <small>{{ s.hint }}</small>
-      </article>
-    </section>
-
-    <div class="home-columns">
-      <section class="card home-panel">
-        <div class="card-head">
-          <h3>快速开始</h3>
-          <span class="muted small">常用入口</span>
-        </div>
-        <div class="home-actions">
-          <button
-            v-for="a in actions"
-            :key="a.path"
-            type="button"
-            class="home-action"
-            @click="router.push(a.path)"
-          >
-            <span class="home-action-icon"><AppIcon :name="a.icon" :size="17" /></span>
-            <span class="home-action-text">
-              <strong>{{ a.label }}</strong>
-              <small>{{ a.desc }}</small>
+        <div v-if="devices.length" class="inventory-list">
+          <router-link v-for="device in devices" :key="device.id" :to="`/d/${device.id}`" class="inventory-row">
+            <span class="inventory-icon"><AppIcon name="chip" :size="17" /></span>
+            <span class="inventory-name">
+              <strong>{{ device.name || device.id }}</strong>
+              <small>{{ project.channelOf(device)?.name || device.channelId }} · {{ addressLabel(device.address) }}</small>
             </span>
-            <AppIcon name="arrowRight" :size="14" class="home-action-arrow" />
-          </button>
+            <span class="inventory-package">{{ project.packageOf(device)?.name || device.package }}</span>
+            <span class="state-pill" :class="!project.live ? 'idle' : device.online ? 'ok' : 'warn'">
+              {{ project.live ? (device.online ? '在线' : '离线') : '待确认' }}
+            </span>
+            <AppIcon class="inventory-arrow" name="arrowUpRight" :size="15" />
+          </router-link>
+        </div>
+        <div v-else class="home-placeholder">
+          <span class="inventory-icon"><AppIcon :name="project.devices.length ? 'check' : 'chip'" :size="20" /></span>
+          <strong>{{ !project.loaded ? '设备清单尚未同步' : project.devices.length ? '没有离线设备' : '还没有设备' }}</strong>
         </div>
       </section>
 
-      <section class="card home-panel">
-        <div class="card-head">
-          <h3>设备概览</h3>
-          <router-link class="home-more" to="/devices">全部设备</router-link>
-        </div>
-
-        <div v-if="recentDevices.length" class="home-devices">
-          <div v-for="d in recentDevices" :key="d.id" class="home-device">
-            <span class="online-dot" :class="{ on: d.online }" />
-            <div class="home-device-main">
-              <strong>{{ d.name }}</strong>
-              <span class="mono muted small">{{ d.id }} · {{ addressLabel(d.address) }}</span>
-            </div>
-            <span class="home-device-pkg" :title="packageName(d.package)">
-              {{ packageName(d.package) }}
-            </span>
-            <span class="state-pill" :class="d.online ? 'ok' : 'idle'">
-              {{ d.online ? '在线' : '离线' }}
-            </span>
+      <section class="card home-health">
+        <header class="home-panel-header">
+          <div><h3>采集通道</h3><p v-if="project.live && runningCount < channels.length">{{ channels.length - runningCount }} 条通道未运行</p></div>
+          <router-link class="panel-link" to="/devices">全部通道 <AppIcon name="arrowRight" :size="14" /></router-link>
+        </header>
+        <div class="health-channels">
+          <router-link v-for="channel in channels.slice(0, 5)" :key="channel.id" class="health-channel"
+            :to="{ path: '/devices', query: { channel: channel.id } }">
+            <AppIcon name="plug" :size="16" />
+            <span :title="channel.name || channel.id">{{ channel.name || channel.id }}</span>
+            <small>{{ transportLabel(channel.transport) }}</small>
+            <span class="state-pill" :class="project.live ? channel.status.tone : 'idle'">{{ project.live ? channel.status.label : '待确认' }}</span>
+          </router-link>
+          <div v-if="!channels.length" class="health-channel-empty muted">
+            {{ project.loaded ? '尚未配置采集通道' : '等待通道清单' }}
           </div>
-        </div>
-
-        <div v-else class="home-empty">
-          <AppIcon name="chip" :size="20" />
-          <span>还没有设备，导入设备包后添加从站。</span>
-          <n-button size="tiny" type="primary" @click="router.push('/devices')">
-            添加设备
-          </n-button>
-        </div>
-
-        <div v-if="recentDevices.length" class="home-device-foot">
-          <span><b>{{ project.onlineDeviceCount }}</b> 在线</span>
-          <span><b>{{ project.devices.length }}</b> 台已配置</span>
-          <span class="spacer" />
-          <span>{{ project.channels.length }} 条总线</span>
         </div>
       </section>
     </div>
+
   </div>
 </template>

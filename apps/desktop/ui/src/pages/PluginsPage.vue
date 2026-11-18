@@ -25,6 +25,7 @@ const importError = ref('')
 const dragOver = ref(false)
 const removing = ref<UiPluginDto | null>(null)
 const removeBusy = ref(false)
+const pluginFilter = ref('')
 
 const PERMISSION_LABEL: Record<string, string> = {
   'tags:subscribe': '订阅点位',
@@ -34,6 +35,12 @@ const PERMISSION_LABEL: Record<string, string> = {
 }
 
 const readyCount = computed(() => pluginHost.statuses.filter((s) => !s.error).length)
+const filteredPlugins = computed(() => {
+  const query = pluginFilter.value.trim().toLowerCase()
+  return plugins.list.filter((plugin) =>
+    [plugin.name, plugin.id, plugin.description].some((field) => field?.toLowerCase().includes(query)),
+  )
+})
 
 function statusOf(id: string): PluginStatus | undefined {
   return pluginHost.statuses.find((s) => s.id === id)
@@ -165,7 +172,7 @@ async function doRemove(): Promise<void> {
   <div class="page">
     <PageHeader
       title="插件"
-      subtitle="ESM UI 插件：安装后提供仪表盘组件与导航页；入口由 gatewayd 静态服务，布局中只保存 kind"
+      subtitle="管理工作台的扩展组件、页面和插件权限"
     >
       <n-button size="small" :disabled="!conn.connected" :loading="plugins.loading" @click="refresh(true)">
         <template #icon><AppIcon name="refresh" :size="15" /></template>
@@ -182,17 +189,18 @@ async function doRemove(): Promise<void> {
       <span>未连接 gatewayd，无法导入或查看 UI 插件。</span>
     </div>
 
-    <div v-if="plugins.list.length" class="plugin-summary">
-      <span class="state-pill good">{{ readyCount }} 个已加载</span>
-      <span class="muted small">共 {{ plugins.list.length }} 个 · SDK v1</span>
-      <span class="spacer" />
-      <span class="muted small">
-        插件与宿主同 webview；manifest 权限是能力门面（v1），强沙箱在后续版本。
-      </span>
+    <div v-if="plugins.list.length" class="card plugin-summary">
+      <div class="plugin-search">
+        <n-input v-model:value="pluginFilter" clearable placeholder="搜索插件" aria-label="搜索插件">
+          <template #prefix><AppIcon name="search" :size="15" /></template>
+        </n-input>
+      </div>
+      <span class="muted">已安装 {{ plugins.list.length }}</span>
+      <span class="state-pill ok">{{ readyCount }} 个已加载</span>
     </div>
 
-    <div v-if="plugins.list.length" class="plugin-grid">
-      <article v-for="p in plugins.list" :key="p.id" class="card plugin-card">
+    <div v-if="filteredPlugins.length" class="plugin-grid">
+      <article v-for="p in filteredPlugins" :key="p.id" class="card plugin-card">
         <header class="plugin-card-head">
           <span class="plugin-glyph"><AppIcon name="plugin" :size="19" /></span>
           <div class="plugin-card-title">
@@ -222,11 +230,12 @@ async function doRemove(): Promise<void> {
           <AppIcon name="alert" :size="14" />
           <span>{{ statusOf(p.id)?.error }}</span>
         </div>
-        <div v-else class="plugin-ok">
+        <div v-else-if="statusOf(p.id)" class="plugin-ok">
           <span class="online-dot on" />
           <span>入口已加载</span>
           <code class="muted">{{ p.entry }}</code>
         </div>
+        <div v-else class="muted small">等待加载</div>
 
         <footer class="plugin-card-foot">
           <n-button
@@ -248,17 +257,20 @@ async function doRemove(): Promise<void> {
       </article>
     </div>
 
+    <EmptyState v-else-if="plugins.list.length" icon="search" title="没有匹配的插件">
+      <n-button size="small" @click="pluginFilter = ''">清除搜索</n-button>
+    </EmptyState>
     <EmptyState
       v-else-if="conn.connected && plugins.loaded"
       icon="plugin"
       title="还没有安装 UI 插件"
-      text="导入包含 manifest.json 与 ESM 入口的目录或 zip；插件可贡献仪表盘组件、导航页，并通过宿主 ctx 订阅实时点位。"
+      text="导入插件包以添加仪表盘组件和导航页面。"
     >
       <n-button size="small" type="primary" @click="openImport">导入插件</n-button>
     </EmptyState>
 
-    <section class="card plugin-doc">
-      <h3>插件包结构</h3>
+    <details class="card plugin-doc">
+      <summary>插件开发说明</summary>
       <pre class="mono">plugin/
 ├─ manifest.json   # id/version/sdkVersion/permissions + widgets/pages
 └─ index.js        # export function mount(el, ctx, props) { ... }
@@ -268,7 +280,7 @@ async function doRemove(): Promise<void> {
         <code>ctx.tags.subscribe/read/write</code> 由宿主聚合与鉴权。示例插件见
         <code>examples/ui-plugins/meter-card</code>。
       </p>
-    </section>
+    </details>
 
     <!-- 导入插件 -->
     <ModalShell

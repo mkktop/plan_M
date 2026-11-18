@@ -21,6 +21,9 @@ pub fn driver_infos(service: &GatewayService) -> Vec<DriverInfoDto> {
             id: d.id().to_string(),
             name: d.name().to_string(),
             transports: d.transports().to_vec(),
+            point_address_format: d.point_address_format().into(),
+            scan_bounds: d.scan_bounds(),
+            scan_requires_package: d.scan_requires_package(),
         })
         .collect();
     list.sort_by(|a, b| a.id.cmp(&b.id));
@@ -132,6 +135,7 @@ pub fn package_dto(p: &InstalledPackage) -> PackageDto {
                         })
                         .collect(),
                     config: w.config.clone(),
+                    config_schema: w.config_schema.clone(),
                     permissions: w.permissions.clone(),
                 })
                 .collect(),
@@ -199,6 +203,7 @@ pub fn ui_plugin_dto(p: &InstalledUiPlugin) -> UiPluginDto {
             .widgets
             .iter()
             .map(|w| UiWidgetDto {
+                config_schema: w.config_schema.clone(),
                 id: w.id.clone(),
                 name: w.name.clone(),
                 description: w.description.clone(),

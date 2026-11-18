@@ -2,7 +2,8 @@
 //!
 //! 用户全程只填表单；这里负责生成 v2 页面（widgets[]）、点表与校验所需的 JSON。
 
-import type { Access, ByteOrder, DataType, RegArea, WidgetRect } from '@/api/types'
+import type { Access, BindingSpec, ByteOrder, DataType, RegArea, WidgetRect } from '@/api/types'
+import { defaultWidgetSize, HOST_DEVICE_COMPONENTS } from '@/utils/devicePages'
 
 export interface DraftBit {
   bit: number | null
@@ -34,15 +35,27 @@ export interface DraftPoint {
   step: number | null
   bits: DraftBit[]
   enum: DraftEnum[]
+  frame?: DraftFramePoint
 }
 
-export interface DraftWidgetConfig {
-  unit?: string
-  decimals?: number | null
-  min?: number | null
-  max?: number | null
-  onLabel?: string
-  offLabel?: string
+export interface DraftFrame {
+  request: string
+  responseBytes: number | null
+  responsePrefix: string
+}
+
+export interface DraftFramePoint {
+  read: DraftFrame
+  valueOffset: number | null
+  write: { frame: DraftFrame; valueOffset: number | null }
+}
+
+export function newFrame(): DraftFrame {
+  return { request: '', responseBytes: null, responsePrefix: '' }
+}
+
+export function newFramePoint(): DraftFramePoint {
+  return { read: newFrame(), valueOffset: null, write: { frame: newFrame(), valueOffset: null } }
 }
 
 export interface DraftGroupItem {
@@ -64,7 +77,8 @@ export interface DraftWidget {
   bit: number | null
   /** 多点槽位（趋势图等） */
   points: string[]
-  config: DraftWidgetConfig
+  config: Record<string, unknown>
+  bindings?: Record<string, BindingSpec>
   /** core:group 的子组件 */
   groupItems: DraftGroupItem[]
 }
@@ -89,20 +103,15 @@ export interface PackageDraft {
     version: string
     description: string
     driver: string
+    framing?: 'auto' | 'rtu' | 'tcp'
+    frameProbe?: DraftFrame
+    paramsJson?: string
+    transports?: import('@/api/types').TransportKind[]
   }
   pollGroups: DraftPollGroup[]
   points: DraftPoint[]
   pages: DraftPage[]
 }
-
-export const CORE_WIDGET_OPTIONS = [
-  { label: '数值卡 · core:value', value: 'core:value' },
-  { label: '仪表 · core:gauge', value: 'core:gauge' },
-  { label: '开关 · core:switch', value: 'core:switch' },
-  { label: '输入 · core:input', value: 'core:input' },
-  { label: '状态位 · core:bits', value: 'core:bits' },
-  { label: '组合容器 · core:group', value: 'core:group' },
-]
 
 export const POINT_TYPES: DataType[] = ['u16', 'i16', 'u32', 'i32', 'u64', 'f32', 'f64', 'bcd16', 'bcd32']
 
@@ -176,13 +185,7 @@ export function newPage(index: number): DraftPage {
   }
 }
 
-export function newWidget(kind: string, point = ''): DraftWidget {
-  const size =
-    kind === 'core:group'
-      ? { w: 6, h: 3 }
-      : kind === 'core:bits' || kind === 'core:input'
-        ? { w: 4, h: 2 }
-        : { w: 3, h: 2 }
+export function newWidget(kind: string, point = '', size = defaultWidgetSize(kind)): DraftWidget {
   return {
     id: nextKey('w'),
     kind,
@@ -200,12 +203,6 @@ export function newWidget(kind: string, point = ''): DraftWidget {
           ]
         : [],
   }
-}
-
-/** 把组件放到页面上（简单行优先：接在最后一行下面）。 */
-export function appendRect(page: DraftPage, w: DraftWidget): WidgetRect {
-  const y = page.widgets.reduce((max, x) => Math.max(max, x.rect.y + x.rect.h), 0)
-  return { x: 0, y, w: w.rect.w, h: w.rect.h }
 }
 
 // —— 生成 JSON ——
@@ -234,17 +231,24 @@ function widgetConfig(w: DraftWidget): Record<string, unknown> | null {
   return Object.keys(out).length ? out : null
 }
 
-function widgetBind(w: DraftWidget): Record<string, unknown> | null {
-  if (w.kind === 'core:group') return null
-  if (w.points.length) {
-    const many = w.points.filter(Boolean).map((p) => ({ point: p }))
-    return many.length ? { series: many } : null
+export function studioBindingSlot(kind: string): string | undefined {
+  return HOST_DEVICE_COMPONENTS.find((widget) => widget.kind === kind)?.slot ?? (kind.startsWith('plugin:') ? 'value' : undefined)
+}
+
+export function widgetBind(w: DraftWidget): Record<string, unknown> | null {
+  if (w.bindings) return Object.keys(w.bindings).length ? w.bindings : null
+  const slot = studioBindingSlot(w.kind)
+  if (!slot) return null
+  if (slot === 'values') {
+    const values = w.points.filter(Boolean).map((point) => ({ point }))
+    return values.length ? { values } : null
   }
   const one = bindingOf(w.point, w.bit)
   return one ? { value: one } : null
 }
 
 export function buildManifest(draft: PackageDraft): Record<string, unknown> {
+  const { driver } = draft.meta
   return {
     schemaVersion: 2,
     id: draft.meta.id.trim(),
@@ -253,9 +257,10 @@ export function buildManifest(draft: PackageDraft): Record<string, unknown> {
     description: draft.meta.description.trim(),
     version: draft.meta.version.trim() || '0.1.0',
     protocol: {
-      driver: draft.meta.driver,
-      transports: ['serial', 'tcp', 'sim'],
-      params: { framing: 'auto', byteOrder: 'abcd' },
+      driver,
+      transports: draft.meta.transports ?? [],
+      params: driver === 'modbus' ? { framing: draft.meta.framing ?? 'auto', byteOrder: 'abcd' } :
+        driver === 'frame' ? { probe: draft.meta.frameProbe } : readObject(draft.meta.paramsJson ?? '{}'),
     },
     ui: {
       pages: draft.pages.map((page) => ({
@@ -275,6 +280,10 @@ export function buildManifest(draft: PackageDraft): Record<string, unknown> {
       })),
     },
   }
+}
+
+function readObject(text: string): unknown {
+  try { return JSON.parse(text) } catch { return text }
 }
 
 function bitsJson(bits: DraftBit[]): Record<string, unknown> | undefined {
@@ -302,11 +311,17 @@ export function buildPoints(draft: PackageDraft): Record<string, unknown> {
     points: draft.points
       .filter((p) => p.id.trim())
       .map((p) => {
-        const bitArea = isBitArea(p.address)
+        const register = draft.meta.driver === 'modbus'
+        const bitArea = register && isBitArea(p.address)
+        const frame = p.frame ?? newFramePoint()
+        const address = register ? p.address.trim() : draft.meta.driver === 'frame' ? {
+          read: frame.read, valueOffset: frame.valueOffset,
+          ...(p.access === 'rw' ? { write: frame.write } : {}),
+        } : readObject(p.address)
         return {
           id: p.id.trim(),
           name: p.name.trim() || p.id.trim(),
-          address: p.address.trim(),
+          address,
           ...(bitArea ? {} : { type: p.type, byteOrder: p.byteOrder }),
           access: p.access,
           ...(!bitArea && p.scale != null ? { scale: p.scale } : {}),

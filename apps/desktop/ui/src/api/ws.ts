@@ -103,6 +103,7 @@ class GatewayClient {
     hostVersion: '',
     lastError: '',
     connectedAt: 0,
+    session: 0,
     attempts: 0,
     logs: [] as LogEntry[],
     settings: loadSettings(),
@@ -257,7 +258,7 @@ class GatewayClient {
     }
 
     ws.onmessage = (ev) => {
-      if (typeof ev.data !== 'string') return
+      if (this.ws !== ws || typeof ev.data !== 'string') return
       let msg: ServerMsg
       try {
         msg = JSON.parse(ev.data) as ServerMsg
@@ -271,6 +272,7 @@ class GatewayClient {
         window.clearTimeout(authTimer)
         this.state.hostVersion = msg.hostVersion
         this.state.connectedAt = Date.now()
+        this.state.session += 1
         this.state.attempts = 0
         this.state.lastError = ''
         this.setState('connected')

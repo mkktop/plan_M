@@ -1,21 +1,17 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import { useProjectStore } from '@/stores/project'
+import { systemModules } from '@/utils/systemPages'
 
 export const router = createRouter({
   // 桌面壳加载本地文件，hash 路由最稳（无需服务端 fallback）。
   history: createWebHashHistory(),
   routes: [
     { path: '/', redirect: '/home' },
-    {
-      path: '/home',
-      component: () => import('@/pages/HomePage.vue'),
-      meta: { title: '首页' },
-    },
-    {
-      path: '/diagnostics',
-      component: () => import('@/pages/DiagnosticsPage.vue'),
-      meta: { title: '诊断' },
-    },
+    ...systemModules.map(({ id, title, load }) => ({
+      path: `/${id}`,
+      component: load,
+      meta: { title },
+    })),
     {
       // 全局仪表盘已撤出导航（跨设备组态后续再做）；组件仍在设备工作区里使用
       path: '/dashboard',
@@ -27,25 +23,11 @@ export const router = createRouter({
       redirect: '/devices',
     },
     {
-      path: '/devices',
-      component: () => import('@/pages/DevicesPage.vue'),
-      meta: { title: '设备' },
-    },
-    {
-      path: '/packages',
-      component: () => import('@/pages/PackagesPage.vue'),
-      meta: { title: '设备包' },
-    },
-    {
-      path: '/plugins',
-      component: () => import('@/pages/PluginsPage.vue'),
-      meta: { title: '插件' },
-    },
-    {
       path: '/plugin/:pluginId/:pageId',
       component: () => import('@/pages/PluginPage.vue'),
       meta: { title: '插件页面' },
     },
+    { path: '/workspace/:pageId', component: { render: () => null }, meta: { title: '工作台页面' } },
     {
       // 设备工作区：一个标签页 = 一台设备，页面来自该设备的设备包
       path: '/d/:deviceId/:pageId?',
@@ -84,11 +66,6 @@ export const router = createRouter({
           ...(typeof to.query.device === 'string' ? { device: to.query.device } : {}),
         },
       }),
-    },
-    {
-      path: '/settings',
-      component: () => import('@/pages/SettingsPage.vue'),
-      meta: { title: '设置' },
     },
     { path: '/:pathMatch(.*)*', redirect: '/home' },
   ],

@@ -13,7 +13,8 @@ pub mod ui_plugin;
 pub mod validate;
 
 pub use install::{
-    install, load_package_dir, InstalledPackage, LoadedPackage, PackageError, PackageRegistry,
+    install, install_checked, load_package_dir, InstalledPackage, LoadedPackage, PackageError,
+    PackageRegistry, ACTIVE_VERSION_FILE,
 };
 pub use manifest::{
     BindingDecl, BindingSpec, PackageManifest, PackageUiDecl, PageLayoutDecl, ProtocolDecl,

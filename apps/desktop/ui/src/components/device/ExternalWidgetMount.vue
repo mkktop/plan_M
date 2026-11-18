@@ -49,11 +49,6 @@ async function mount(): Promise<void> {
   }
 }
 
-function remount(): void {
-  if (instance?.update()) return
-  void mount()
-}
-
 onMounted(() => void mount())
 
 onBeforeUnmount(() => {
@@ -63,15 +58,12 @@ onBeforeUnmount(() => {
 })
 
 watch(
-  () => [
-    props.descriptor.moduleUrl,
-    props.descriptor.kind,
-    props.deviceId,
-    props.mode,
-    JSON.stringify(props.component.bind ?? null),
-    JSON.stringify(props.component.config ?? null),
-  ],
-  remount,
+  [() => JSON.stringify([props.descriptor, props.deviceId, props.mode, props.pkg?.version]),
+    () => JSON.stringify(props.component)],
+  ([identity], [previous]) => {
+    if (identity === previous && instance?.update(props.component)) return
+    void mount()
+  },
 )
 </script>
 

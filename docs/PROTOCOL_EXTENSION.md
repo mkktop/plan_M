@@ -1,5 +1,9 @@
 # 扩展指南：新增传输 / 协议
 
+支持定长请求与应答的设备可以在设备包中选择 `protocol.driver: "frame"`。包编辑器可配置探测帧、读取帧、写入帧与数据偏移，设备扫描使用选定设备包的探测帧。字段约束、示例和读写验收见 [设备接入与固定帧配置](DEVICE_INTEGRATION.md)。
+
+请求和应答前缀用空格分隔的十六进制字节表示，`{unit}` 代入 0–255 的设备地址。应答长度包含前缀，数值偏移从 0 开始。可写点在请求帧中用 `00` 预留数值字节，驱动按点表的类型、字节序及工程量换算填入。此驱动适用于串口与 TCP 上的定长轮询协议。需要变长帧、动态校验和、握手或主动上报的设备使用专用驱动。
+
 本项目的扩展点只有两个：`TransportFactory`（传输）与 `Driver`（协议）。
 两者都在 `crates/domain` 定义，宿主 `apps/gatewayd/src/lib.rs` 注册。
 gateway / supervisor / packaging / wire 主干不需要改动。
@@ -148,6 +152,7 @@ impl Driver for XxxDriver {
 pub fn drivers() -> Vec<Arc<dyn Driver>> {
     vec![
         Arc::new(hmi_driver_modbus::ModbusDriver::new()),
+        Arc::new(hmi_driver_frame::FrameDriver),
         Arc::new(hmi_driver_xxx::XxxDriver::new()),   // 新增
     ]
 }

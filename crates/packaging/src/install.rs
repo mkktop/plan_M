@@ -58,7 +58,7 @@ pub fn load_package_dir(
         return Err(PackageError::MissingFile("points.json".into()));
     }
 
-    let mut manifest: PackageManifest = parse_json_file(&manifest_path)?;
+    let mut manifest: PackageManifest = read_manifest(&manifest_path)?;
     // v2 页面 / 包内组件短名归一化（安装校验与运行时 DTO 共用同一形态）
     manifest.ui.normalize(&manifest.id);
     let points: PointsTable = parse_json_file(&points_path)?;
@@ -77,6 +77,19 @@ pub fn load_package_dir(
         return Err(PackageError::Invalid(issues.errors.join("\n  - ")));
     }
     Ok(LoadedPackage { manifest, points })
+}
+
+fn read_manifest(path: &Path) -> Result<PackageManifest, PackageError> {
+    let mut raw: serde_json::Value = parse_json_file(path)?;
+    if raw["schemaVersion"] == 1 && raw["protocol"]["driver"] == "modbus-rtu" {
+        let byte_order = raw["protocol"]["defaults"]["byteOrder"].clone();
+        raw["schemaVersion"] = 2.into();
+        raw["protocol"] = serde_json::json!({
+            "driver": "modbus",
+            "params": { "framing": "rtu", "byteOrder": byte_order }
+        });
+    }
+    serde_json::from_value(raw).map_err(|e| PackageError::Invalid(e.to_string()))
 }
 
 fn parse_json_file<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, PackageError> {
@@ -101,6 +114,17 @@ pub fn install(
     host_version: &Version,
     drivers: &[Arc<dyn Driver>],
 ) -> Result<InstalledPackage, PackageError> {
+    install_checked(src, dest_root, host_version, drivers, |_| Ok(()))
+}
+
+/// Check the staged package against the running project before publishing it.
+pub fn install_checked(
+    src: &Path,
+    dest_root: &Path,
+    host_version: &Version,
+    drivers: &[Arc<dyn Driver>],
+    check: impl FnOnce(&InstalledPackage) -> Result<(), PackageError>,
+) -> Result<InstalledPackage, PackageError> {
     // 1. 物化源到临时目录（时间戳+进程id+序号保证唯一）
     let work_dir = unique_temp_dir("hmi-pkg-install");
 
@@ -122,21 +146,40 @@ pub fn install(
             }
         }
 
-        // 4. 落盘：dest_root/<id>/<version>/（幂等：已存在先删）
         let target = dest_root
             .join(&loaded.manifest.id)
             .join(loaded.manifest.version.to_string());
-        if target.exists() {
-            fs::remove_dir_all(&target)?;
-        }
-        fs::create_dir_all(&target)?;
-        copy_dir_recursive(&pkg_dir, &target)?;
-
-        Ok(InstalledPackage {
+        let installed = InstalledPackage {
             manifest: loaded.manifest,
             points: loaded.points,
-            dir: target,
-        })
+            dir: target.clone(),
+        };
+        check(&installed)?;
+        let parent = target.parent().expect("package version has a parent");
+        fs::create_dir_all(parent)?;
+        // Stage on the destination volume and outside the registry's version directories.
+        let staging = dest_root.with_file_name(work_dir.file_name().expect("temporary directory"));
+        fs::create_dir(&staging)?;
+        let backup = staging.join("previous");
+        let staged = staging.join("candidate");
+        let published = (|| -> Result<(), PackageError> {
+            copy_dir_recursive(&pkg_dir, &staged)?;
+            if target.exists() {
+                fs::rename(&target, &backup)?;
+            }
+            if let Err(error) = fs::rename(&staged, &target) {
+                if backup.exists() {
+                    fs::rename(&backup, &target)?;
+                }
+                return Err(error.into());
+            }
+            Ok(())
+        })();
+        if published.is_ok() || !backup.exists() {
+            let _ = fs::remove_dir_all(&staging);
+        }
+        published?;
+        Ok(installed)
     })();
 
     let _ = fs::remove_dir_all(&work_dir);
@@ -254,12 +297,14 @@ pub struct InstalledPackage {
 }
 
 /// 包注册表：`root/<包id>/<版本>/`，每个 id 取最高版本。
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct PackageRegistry {
     packages: Vec<InstalledPackage>,
     /// 扫描时跳过的损坏包（路径, 原因）
     pub broken: Vec<(PathBuf, String)>,
 }
+
+pub const ACTIVE_VERSION_FILE: &str = ".active-version";
 
 impl PackageRegistry {
     /// 扫描目录重建注册表。根目录不存在视为空（不报错）。
@@ -295,7 +340,16 @@ impl PackageRegistry {
                 continue;
             }
             candidates.sort_by(|a, b| b.manifest.version.cmp(&a.manifest.version));
-            if let Some(best) = candidates.into_iter().next() {
+            let active = fs::read_to_string(id_dir.path().join(ACTIVE_VERSION_FILE)).ok();
+            let offset = active
+                .and_then(|text| {
+                    let version = Version::parse(text.trim()).ok()?;
+                    candidates
+                        .iter()
+                        .position(|package| package.manifest.version == version)
+                })
+                .unwrap_or(0);
+            if let Some(best) = candidates.into_iter().nth(offset) {
                 reg.packages.push(best);
             }
         }
@@ -310,6 +364,17 @@ impl PackageRegistry {
         &self.packages
     }
 
+    pub fn activate(&mut self, package: InstalledPackage) {
+        self.remove(&package.manifest.id);
+        self.packages.push(package);
+        self.packages
+            .sort_by(|a, b| a.manifest.id.cmp(&b.manifest.id));
+    }
+
+    pub fn remove(&mut self, id: &str) {
+        self.packages.retain(|package| package.manifest.id != id);
+    }
+
     pub fn is_empty(&self) -> bool {
         self.packages.is_empty()
     }
@@ -319,6 +384,31 @@ impl PackageRegistry {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn parses_legacy_modbus_package() {
+        let source = tempfile::tempdir().unwrap();
+        fs::write(
+            source.path().join("manifest.json"),
+            r#"{
+            "schemaVersion": 1, "id": "com.test.old", "name": "Old Meter", "version": "1.0.0",
+            "protocol": { "driver": "modbus-rtu", "defaults": { "byteOrder": "cdab" } }
+        }"#,
+        )
+        .unwrap();
+        fs::write(
+            source.path().join("points.json"),
+            r#"{
+            "points": [{ "id": "x", "register": "40101", "type": "u32" }]
+        }"#,
+        )
+        .unwrap();
+        let loaded = load_package_dir(source.path(), &test_drivers()).unwrap();
+        assert_eq!(loaded.manifest.protocol.driver, "modbus");
+        assert_eq!(loaded.manifest.protocol.params["byteOrder"], "cdab");
+        assert_eq!(loaded.manifest.protocol.params["framing"], "rtu");
+        assert!(loaded.points.points[0].address.as_register().is_some());
+    }
 
     fn test_drivers() -> Vec<Arc<dyn Driver>> {
         vec![Arc::new(hmi_driver_modbus::ModbusDriver::new())]

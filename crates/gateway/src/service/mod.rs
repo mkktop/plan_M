@@ -59,6 +59,8 @@ pub struct GatewayService {
     packages: RwLock<Arc<PackageRegistry>>,
     ui_plugins: RwLock<UiPluginRegistry>,
     config: RwLock<ProjectConfig>,
+    /// Prevent a write or snapshot from straddling a configuration activation.
+    activation: RwLock<()>,
     channels: RwLock<HashMap<String, ChannelHandle>>,
     /// 通道配置错误（传输未注册等）
     channel_errors: RwLock<HashMap<String, String>>,
@@ -113,6 +115,7 @@ impl GatewayService {
             packages: RwLock::new(Arc::new(registry)),
             ui_plugins: RwLock::new(ui_plugins),
             config: RwLock::new(config),
+            activation: RwLock::new(()),
             channels: RwLock::new(HashMap::new()),
             channel_errors: RwLock::new(HashMap::new()),
             device_errors: RwLock::new(HashMap::new()),
@@ -123,6 +126,7 @@ impl GatewayService {
 
     /// 启动配置里的全部通道。
     pub async fn start(self: &Arc<Self>) -> anyhow::Result<()> {
+        let _activation = self.activation.write().await;
         let ids: Vec<String> = self
             .config
             .read()
@@ -159,6 +163,7 @@ impl GatewayService {
 
     /// 全量快照（领域视图；wire 映射见 gatewayd `dto`）。
     pub async fn snapshot(&self) -> Snapshot {
+        let _activation = self.activation.read().await;
         let cfg = self.config.read().await;
         let channels = self.channels.read().await;
         let packages = self.packages.read().await.clone();

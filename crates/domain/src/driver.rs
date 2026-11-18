@@ -11,7 +11,7 @@
 use crate::config::DeviceAddress;
 use crate::link::{Link, LinkError, TransportKind};
 use crate::points::{PointDef, PointsTable};
-use crate::protocol::{DriverIssues, ProtocolDecl};
+use crate::protocol::{DriverIssues, ProtocolDecl, ScanRange};
 use crate::value::{Quality, TagId, Value};
 use async_trait::async_trait;
 use serde_json::Value as Json;
@@ -150,7 +150,7 @@ impl DevicePlan {
 /// 编译输入。
 pub struct CompileInput<'a> {
     pub device_id: &'a str,
-    pub overrides: &'a serde_json::Map<String, Json>,
+    /// The final point table for the device, after applying instance overrides.
     pub points: &'a PointsTable,
     pub protocol: &'a ProtocolDecl,
 }
@@ -162,6 +162,15 @@ pub struct CompileInput<'a> {
 /// [`DevicePlan`]/[`PollGroup`] 里，不得放在驱动自身。
 #[async_trait]
 pub trait Driver: Send + Sync {
+    /// Resolve the point definitions shared by compilation and write commands.
+    fn effective_points(
+        &self,
+        table: &PointsTable,
+        overrides: &serde_json::Map<String, Json>,
+    ) -> (PointsTable, Vec<String>) {
+        crate::points::apply_overrides(table, overrides)
+    }
+
     /// 驱动 id（设备包 `protocol.driver` 与之匹配）
     fn id(&self) -> &'static str;
 
@@ -172,6 +181,18 @@ pub trait Driver: Send + Sync {
 
     /// 该驱动支持的传输种类
     fn transports(&self) -> &'static [TransportKind];
+
+    fn point_address_format(&self) -> &'static str {
+        "structured"
+    }
+
+    fn scan_bounds(&self) -> Option<ScanRange> {
+        None
+    }
+
+    fn scan_requires_package(&self) -> bool {
+        false
+    }
 
     /// 校验设备包（安装/导入时调用）。默认不做额外校验。
     fn validate_package(&self, _points: &PointsTable, _protocol: &ProtocolDecl) -> DriverIssues {

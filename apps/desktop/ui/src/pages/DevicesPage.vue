@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NButton, NInput, NInputNumber, NSelect } from 'naive-ui'
+import { NButton, NInput, NSelect } from 'naive-ui'
 import AppIcon from '@/components/AppIcon.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import ModalShell from '@/components/ModalShell.vue'
@@ -11,8 +11,12 @@ import ChannelScanModal from '@/components/channel/ChannelScanModal.vue'
 import SerialPortsCard from '@/components/channel/SerialPortsCard.vue'
 import { useConnectionStore } from '@/stores/connection'
 import { useProjectStore } from '@/stores/project'
+import { useTagsStore } from '@/stores/tags'
 import { errorMessage, useToastStore } from '@/stores/toast'
-import { addressLabel, channelSummary, packageSupportsTransport } from '@/utils/transport'
+import { nowMs } from '@/utils/clock'
+import { pointCount } from '@/utils/devicePoints'
+import { formatClock } from '@/utils/format'
+import { addressLabel, channelStatus, channelSummary, packageSupportsTransport, transportLabel } from '@/utils/transport'
 import type { ChannelDto, DeviceAddress, DeviceDto, PackageDto } from '@/api/types'
 
 // 设备页 = 总线（串口通道）+ 从站设备。通道是设备的父级，所以合并在一页：
@@ -22,9 +26,11 @@ const router = useRouter()
 const project = useProjectStore()
 const conn = useConnectionStore()
 const toast = useToastStore()
+const tags = useTagsStore()
 
 const showForm = ref(false)
 const saving = ref(false)
+const saveError = ref('')
 const idTouched = ref(false)
 const pendingDelete = ref<DeviceDto | null>(null)
 const deleting = ref(false)
@@ -36,6 +42,33 @@ const channelInitialPort = ref<string | undefined>(undefined)
 const scanChannel = ref<ChannelDto | null>(null)
 const pendingChannelDelete = ref<ChannelDto | null>(null)
 const deletingChannel = ref(false)
+const firstDevice = computed(() => project.loaded && !project.devices.length)
+const compatibleChannel = computed(() => project.channels.find((channel) =>
+  project.packages.some((pkg) => packageSupportsTransport(pkg, channel.transport, project.drivers)),
+))
+const verificationId = ref('')
+const verificationStartedAt = ref(0)
+const verifiedAt = ref<number>()
+const verificationWaiting = computed(() => nowMs.value - verificationStartedAt.value < 10_000)
+const verificationDevice = computed(() => project.devices.find((device) => device.id === verificationId.value))
+const verificationTags = computed(() => {
+  const device = verificationDevice.value
+  if (!device || verifiedAt.value !== undefined) return []
+  return project.packageOf(device)?.points.map((point) => `${device.id}.${point.id}`) ?? []
+})
+watch(verificationTags, (list, _previous, onCleanup) => {
+  if (list.length) onCleanup(tags.subscribe(list))
+})
+watch(() => {
+  if (!project.live || !verificationDevice.value?.online) return undefined
+  for (const tag of verificationTags.value) {
+    const change = tags.getLive(tag)
+    if (change?.quality === 'good') return change
+  }
+  return undefined
+}, (change) => {
+  if (change) verifiedAt.value = change.tsMs
+})
 
 const form = reactive({
   channelId: '',
@@ -68,25 +101,63 @@ const packageOptions = computed(() =>
   compatiblePackages.value.map((p) => ({ label: `${p.name} · v${p.version}`, value: p.id })),
 )
 
-const STATE_META: Record<string, { label: string; tone: string }> = {
-  running: { label: '运行中', tone: 'ok' },
-  recovering: { label: '重连中', tone: 'warn' },
-  faulted: { label: '故障', tone: 'bad' },
-  stopped: { label: '已停止', tone: 'idle' },
+function stateOf(ch: ChannelDto): { label: string; tone: string } {
+  return project.live ? channelStatus(project.channelStates[ch.id] ?? ch.state) : { label: '待确认', tone: 'idle' }
 }
 
-function stateOf(ch: ChannelDto): { label: string; tone: string } {
-  const s = project.channelStates[ch.id] ?? ch.state
-  return STATE_META[s] ?? { label: s, tone: 'idle' }
+// —— 搜索 / 状态筛选：作用于设备卡片，滤空的总线整组隐藏 ——
+const deviceFilter = ref('')
+const statusFilter = ref<'all' | 'online' | 'offline'>('all')
+const currentStatusFilter = computed(() => project.live ? statusFilter.value : 'all')
+const channelFilter = computed(() =>
+  route.query.add !== '1' && typeof route.query.channel === 'string' ? route.query.channel : '',
+)
+const listMode = ref<boolean>()
+const compactList = computed(() => listMode.value ?? project.devices.length >= 8)
+const STATUS_FILTERS = [
+  { label: '全部', value: 'all' },
+  { label: '在线', value: 'online' },
+  { label: '离线', value: 'offline' },
+] as const
+watch(() => route.query.status, (status) => {
+  statusFilter.value = status === 'online' || status === 'offline' ? status : 'all'
+}, { immediate: true })
+
+function matchesDevice(d: DeviceDto): boolean {
+  const q = deviceFilter.value.trim().toLowerCase()
+  const hit = !q || [d.id, d.name, addressLabel(d.address), project.packageOf(d)?.name]
+    .some((field) => field?.toLowerCase().includes(q))
+  const st =
+    currentStatusFilter.value === 'all' ||
+    (currentStatusFilter.value === 'online' ? d.online : !d.online)
+  return hit && st
+}
+
+const filtering = computed(
+  () => deviceFilter.value.trim() !== '' || currentStatusFilter.value !== 'all',
+)
+
+const deviceGroups = computed(() =>
+  project.channels
+    .filter((channel) => !channelFilter.value || channel.id === channelFilter.value)
+    .map((channel) => ({ channel, devices: project.devicesOn(channel.id).filter(matchesDevice) }))
+    .filter(({ devices }) => !filtering.value || devices.length > 0),
+)
+const visibleCount = computed(() => deviceGroups.value.reduce((count, group) => count + group.devices.length, 0))
+
+function openWorkspace(d: DeviceDto): void {
+  void router.push(`/d/${d.id}`)
 }
 
 function onlineOn(channelId: string): number {
   return project.devicesOn(channelId).filter((d) => d.online).length
 }
 
-function pointCount(d: DeviceDto): number {
-  const pkg = project.packageOf(d)
-  return pkg ? pkg.points.reduce((n, p) => n + 1 + p.bits.length, 0) : 0
+function clearFilters(): void {
+  deviceFilter.value = ''
+  statusFilter.value = 'all'
+  const { channel, status, ...query } = route.query
+  if (channel || status) void router.replace({ query })
 }
 
 function parseAddress(raw: string): DeviceAddress {
@@ -111,8 +182,8 @@ function autoFill(): void {
 }
 
 watch([() => form.packageId, () => form.address], autoFill)
-watch(selectedChannel, () => {
-  if (form.packageId && !compatiblePackages.value.some((p) => p.id === form.packageId)) {
+watch(compatiblePackages, () => {
+  if (!compatiblePackages.value.some((p) => p.id === form.packageId)) {
     form.packageId = compatiblePackages.value[0]?.id || ''
   }
 })
@@ -122,7 +193,11 @@ function openAdd(
   address?: DeviceAddress,
   packageId?: string,
 ): void {
-  form.channelId = channelId || project.channels[0]?.id || ''
+  const requestedPkg = project.packageById.get(packageId ?? '')
+  const packageChannel = requestedPkg && project.channels.find((channel) =>
+    packageSupportsTransport(requestedPkg, channel.transport, project.drivers),
+  )
+  form.channelId = channelId || packageChannel?.id || compatibleChannel.value?.id || project.channels[0]?.id || ''
   const allow = compatiblePackages.value
   form.packageId =
     (packageId && allow.some((p) => p.id === packageId) ? packageId : '') ||
@@ -130,6 +205,7 @@ function openAdd(
     ''
   form.address = address !== undefined ? String(address) : '1'
   idTouched.value = false
+  saveError.value = ''
   autoFill()
   showForm.value = true
 }
@@ -143,31 +219,40 @@ function validate(): string | null {
   if (!form.address.trim()) return '设备地址必填'
   const pkg = project.packageById.get(form.packageId)
   if (pkg?.protocol.driver === 'modbus') {
-    const n = Number(form.address.trim())
-    if (!Number.isInteger(n) || n < 1 || n > 247) return 'Modbus 从站地址需为 1–247 的整数'
+    const n = parseAddress(form.address)
+    if (typeof n !== 'number' || n < 1 || n > 247) return 'Modbus 从站地址需为 1–247 的整数'
   }
   return null
 }
 
 async function save(): Promise<void> {
+  if (!project.live || saving.value) return
   const err = validate()
   if (err) {
-    toast.error(err)
+    saveError.value = err
     return
   }
   saving.value = true
+  saveError.value = ''
+  const verify = firstDevice.value
+  const id = form.id.trim()
   try {
     await project.addDevice({
-      id: form.id.trim(),
-      name: form.name.trim() || form.id.trim(),
+      id,
+      name: form.name.trim() || id,
       channelId: form.channelId,
       package: form.packageId,
       address: parseAddress(form.address),
     })
-    toast.success(`设备 ${form.id.trim()} 已添加`)
+    toast.success(`设备 ${id} 已添加`)
     showForm.value = false
+    if (verify) {
+      verifiedAt.value = undefined
+      verificationStartedAt.value = Date.now()
+      verificationId.value = id
+    }
   } catch (e) {
-    toast.error(errorMessage(e))
+    saveError.value = errorMessage(e)
   } finally {
     saving.value = false
   }
@@ -234,105 +319,163 @@ async function doDeleteChannel(): Promise<void> {
   }
 }
 
-function addDeviceFromScan(address: DeviceAddress): void {
+function addDeviceFromScan(address: DeviceAddress, packageId?: string): void {
   const ch = scanChannel.value
   scanChannel.value = null
-  openAdd(ch?.id, address)
+  openAdd(ch?.id, address, packageId)
 }
 
-// 从设备包页 / 设备工作区跳转过来时自动打开添加对话框（快照可能已加载，也可能还在路上）。
-const prefill = ref<{ channel?: string; address?: string; packageId?: string } | null>(null)
-
-function applyPrefill(): void {
-  if (!project.loaded || !prefill.value) return
-  const p = prefill.value
-  prefill.value = null
-  openAdd(p.channel, p.address, p.packageId)
-}
-
-watch(() => project.loaded, applyPrefill, { immediate: true })
-watch(prefill, applyPrefill)
-
-onMounted(() => {
-  const q = route.query
-  if (q.add === '1') {
-    prefill.value = {
-      channel: typeof q.channel === 'string' ? q.channel : undefined,
-      address: typeof q.address === 'string' ? q.address : undefined,
-      packageId: typeof q.package === 'string' ? q.package : undefined,
-    }
-    void router.replace({ query: {} })
+watch([() => project.live, () => route.query], ([live, q]) => {
+  if (!live || route.path !== '/devices' || q.add !== '1') return
+  if (compatibleChannel.value) {
+    openAdd(
+      typeof q.channel === 'string' ? q.channel : undefined,
+      typeof q.address === 'string' ? q.address : undefined,
+      typeof q.package === 'string' ? q.package : undefined,
+    )
   }
-})
+  const { add, channel, address, package: packageId, ...query } = q
+  void router.replace({ query })
+}, { immediate: true })
 </script>
 
 <template>
-  <div class="page">
+  <div class="page devices-page">
     <PageHeader
       title="设备"
-      subtitle="通道 = 串口 / TCP / 虚拟总线；设备 = 设备包 + 通道 + 协议地址"
+      subtitle="按采集通道管理设备，查看在线状态和点位"
     >
-      <n-button size="small" @click="openChannelCreate()">
+      <n-button v-if="!firstDevice" size="small" :disabled="!project.live" @click="openChannelCreate()">
         <template #icon><AppIcon name="plug" :size="15" /></template>
         新建通道
       </n-button>
-      <n-button size="small" @click="router.push('/packages')">
+      <n-button v-if="!firstDevice || compatibleChannel" size="small" @click="router.push('/packages')">
         <template #icon><AppIcon name="package" :size="15" /></template>
         设备包管理
       </n-button>
       <n-button
+        v-if="!firstDevice"
         size="small"
         type="primary"
-        :disabled="!project.channels.length || !project.packages.length"
-        @click="openAdd()"
+        :disabled="!project.live || !compatibleChannel"
+        @click="openAdd(channelFilter || undefined)"
       >
         <template #icon><AppIcon name="plus" :size="15" /></template>
         添加设备
       </n-button>
     </PageHeader>
 
-    <div v-if="!conn.connected" class="banner warn">
+    <div v-if="!project.live" class="banner warn" role="status">
       <AppIcon name="alert" :size="16" />
-      <span>未连接 gatewayd，设备与总线的配置不可编辑。</span>
+      <span>{{ conn.connected ? '正在同步设备与通道。' : '网关连接已断开，设备和通道状态待确认。' }}</span>
+      <n-button v-if="!conn.connected" size="tiny" quaternary @click="router.push('/diagnostics')">连接诊断</n-button>
     </div>
 
-    <div v-if="!project.packages.length && project.loaded" class="banner info">
-      <AppIcon name="alert" :size="16" />
-      <span>没有已安装的设备包。到「设备包」页导入 <code>manifest.json + points.json</code> 的目录或 zip。</span>
-      <n-button size="tiny" quaternary @click="router.push('/packages')">去导入</n-button>
-    </div>
+    <section v-if="firstDevice" class="card device-setup">
+      <h3>接入第一台设备</h3>
+      <ol class="setup-steps">
+        <li :class="{ done: project.channels.length }">
+          <AppIcon :name="project.channels.length ? 'check' : 'plug'" :size="16" /> 采集通道
+        </li>
+        <li :class="{ done: compatibleChannel }">
+          <AppIcon :name="compatibleChannel ? 'check' : 'package'" :size="16" /> 兼容的设备包
+        </li>
+        <li><AppIcon name="activity" :size="16" /> 添加并验证设备</li>
+      </ol>
+      <p v-if="!project.channels.length">为现场设备创建串口、TCP 等采集通道，也可以先创建虚拟总线。</p>
+      <p v-else-if="!compatibleChannel">{{ project.packages.length ? '现有设备包与通道不兼容，请导入支持该传输方式的型号。' : '导入与通道兼容的设备包，加载型号和点位定义。' }}</p>
+      <p v-else>手填设备地址，或先扫描下方通道。添加后会验证能否收到有效读数。</p>
+      <n-button v-if="!project.channels.length" type="primary" :disabled="!project.live" @click="openChannelCreate()">创建通道</n-button>
+      <n-button v-else-if="!compatibleChannel" type="primary" :disabled="!project.live" @click="router.push('/packages?setup=1')">导入设备包</n-button>
+      <n-button v-else type="primary" :disabled="!project.live" @click="openAdd()">添加并验证设备</n-button>
+    </section>
+
+    <section v-if="verificationDevice" class="card device-verification" aria-label="采集验证">
+      <span class="group-icon"><AppIcon :name="verifiedAt === undefined ? 'activity' : 'check'" :size="19" /></span>
+      <div class="group-identity" role="status">
+        <h3>{{ verifiedAt !== undefined ? '已收到首个有效读数' : verificationWaiting ? '正在验证采集' : '暂未收到有效读数' }}</h3>
+        <p class="muted small">{{ verificationDevice.name || verificationDevice.id }} ·
+          {{ verifiedAt !== undefined ? formatClock(verifiedAt) : project.live ? '等待点值更新' : '等待网关恢复连接' }}
+        </p>
+      </div>
+      <n-button size="small" @click="gotoTags(verificationDevice)">查看读数</n-button>
+      <n-button size="small" quaternary @click="verificationId = ''">{{ verifiedAt === undefined ? '关闭' : '完成' }}</n-button>
+    </section>
 
     <template v-if="project.channels.length">
-      <section v-for="ch in project.channels" :key="ch.id" class="channel-group">
+      <div v-if="project.devices.length || channelFilter" class="toolbar">
+        <div class="search-box">
+          <AppIcon name="search" :size="14" class="search-icon" />
+          <input
+            v-model="deviceFilter"
+            class="search-input"
+            type="search"
+            placeholder="搜索设备名称 / ID"
+            aria-label="搜索设备"
+          />
+        </div>
+        <div class="filter-chips">
+          <button
+            v-for="f in STATUS_FILTERS"
+            :key="f.value"
+            type="button"
+            class="filter-chip"
+            :class="{ active: currentStatusFilter === f.value }"
+            :aria-pressed="currentStatusFilter === f.value"
+            :disabled="!project.live && f.value !== 'all'"
+            @click="statusFilter = f.value"
+          >
+            {{ f.label }}
+          </button>
+        </div>
+        <n-button v-if="channelFilter" size="tiny" quaternary @click="clearFilters">显示全部通道</n-button>
+        <span class="spacer" />
+        <span class="muted">
+          {{ filtering || channelFilter ? `匹配 ${visibleCount} 台` : `${project.channels.length} 条通道 · ${project.devices.length} 台设备` }}
+        </span>
+        <div v-if="project.devices.length" class="filter-chips" aria-label="设备视图">
+          <button type="button" class="filter-chip" :class="{ active: !compactList }" :aria-pressed="!compactList" @click="listMode = false">卡片</button>
+          <button type="button" class="filter-chip" :class="{ active: compactList }" :aria-pressed="compactList" @click="listMode = true">列表</button>
+        </div>
+      </div>
+
+      <section v-for="{ channel: ch, devices } in deviceGroups" :key="ch.id" class="channel-group">
         <header class="group-head">
-          <span class="state-dot" :class="stateOf(ch).tone" :title="stateOf(ch).label" />
-          <h3>{{ ch.name || ch.id }}</h3>
-          <code>{{ ch.id }} · {{ channelSummary(ch) }}</code>
+          <span class="group-icon"><AppIcon name="network" :size="19" /></span>
+          <div class="group-identity">
+            <h3>{{ ch.name || ch.id }}</h3>
+            <small>{{ transportLabel(ch.transport) }}<template v-if="ch.transport !== 'sim'"> · {{ channelSummary(ch) }}</template></small>
+          </div>
           <span class="state-pill" :class="stateOf(ch).tone">{{ stateOf(ch).label }}</span>
           <span v-if="ch.configError" class="state-pill bad" :title="ch.configError">配置错误</span>
           <div class="spacer" />
           <span class="muted small">
-            {{ project.devicesOn(ch.id).length }} 台 · 在线 {{ onlineOn(ch.id) }}
+            {{ project.devicesOn(ch.id).length }} 台<template v-if="project.live"> · 在线 {{ onlineOn(ch.id) }}</template>
           </span>
-          <n-button size="tiny" quaternary @click="scanChannel = ch">
+          <n-button size="tiny" quaternary :disabled="!project.live" @click="scanChannel = ch">
             <template #icon><AppIcon name="scan" :size="14" /></template>
             扫描
           </n-button>
-          <n-button size="tiny" quaternary @click="openChannelEdit(ch)">编辑</n-button>
-          <n-button size="tiny" quaternary @click="openAdd(ch.id)">
+          <n-button size="tiny" quaternary :disabled="!project.live" @click="openChannelEdit(ch)">编辑</n-button>
+          <n-button v-if="!firstDevice" size="tiny" quaternary :disabled="!project.live" @click="openAdd(ch.id)">
             <template #icon><AppIcon name="plus" :size="14" /></template>
             添加设备
           </n-button>
         </header>
 
-        <div class="device-grid">
-          <article v-for="d in project.devicesOn(ch.id)" :key="d.id" class="card device-card">
+        <div v-if="devices.length" class="device-grid" :class="{ 'device-grid-list': compactList }">
+          <article v-for="d in devices" :key="d.id" class="card device-card">
             <div class="device-top">
-              <span class="online-dot" :class="{ on: d.online }" :title="d.online ? '在线' : '离线'" />
-              <div class="device-title">
+              <span class="device-glyph"><AppIcon name="chip" :size="18" /></span>
+              <button
+                type="button"
+                class="device-title"
+                :title="`打开 ${d.name || d.id} 工作区`"
+                @click="openWorkspace(d)"
+              >
                 <strong>{{ d.name || d.id }}</strong>
                 <code>{{ d.id }}</code>
-              </div>
+              </button>
               <span class="slave-badge mono">{{ addressLabel(d.address) }}</span>
             </div>
 
@@ -344,11 +487,11 @@ onMounted(() => {
               </div>
               <div>
                 <span class="label">点位</span>
-                <span class="mono">{{ pointCount(d) }}</span>
+                <span class="mono">{{ pointCount(project.packageOf(d)?.points) }}</span>
               </div>
               <div>
                 <span class="label">状态</span>
-                <span :class="d.online ? 'text-good' : 'text-muted'">{{ d.online ? '在线' : '离线' }}</span>
+                <span :class="project.live && d.online ? 'text-good' : 'muted'">{{ project.live ? (d.online ? '在线' : '离线') : '待确认' }}</span>
               </div>
             </div>
 
@@ -358,37 +501,42 @@ onMounted(() => {
             </div>
 
             <div class="device-foot">
-              <n-button size="tiny" @click="gotoTags(d)">
+              <n-button size="tiny" @click="openWorkspace(d)">
+                <template #icon><AppIcon name="layout" :size="14" /></template>
+                打开工作区
+              </n-button>
+              <n-button size="tiny" quaternary @click="gotoTags(d)">
                 <template #icon><AppIcon name="activity" :size="14" /></template>
-                实时点表
+                数据浏览
               </n-button>
               <div class="spacer" />
-              <n-button size="tiny" quaternary type="error" @click="pendingDelete = d">删除</n-button>
+              <n-button size="tiny" quaternary type="error" :disabled="!project.live" @click="pendingDelete = d">删除</n-button>
             </div>
           </article>
 
-          <button type="button" class="device-add-tile" @click="openAdd(ch.id)">
-            <AppIcon name="plus" :size="20" />
-            <span>添加设备</span>
-          </button>
         </div>
 
         <div v-if="!project.devicesOn(ch.id).length" class="group-empty muted">
-          这条总线还没有从站。接好设备后点「添加设备」，或用「扫描」自动找地址。
+          该通道还没有设备。
         </div>
       </section>
+
+      <div v-if="!deviceGroups.length" class="banner info">
+        <AppIcon name="search" :size="16" />
+        <span>没有符合当前搜索 / 筛选条件的设备。</span>
+        <n-button size="tiny" quaternary @click="clearFilters">
+          清除筛选
+        </n-button>
+      </div>
     </template>
 
     <EmptyState
-      v-else-if="project.loaded"
-      icon="plug"
-      title="还没有通道"
-      text="接入 USB-485 / TCP 网关后建一条通道；没有硬件时可用虚拟总线演示。"
-    >
-      <n-button size="small" type="primary" @click="openChannelCreate()">新建通道</n-button>
-    </EmptyState>
+      v-else-if="!project.loaded"
+      icon="network"
+      title="等待设备清单"
+    />
 
-    <SerialPortsCard @use="openChannelCreate" />
+    <SerialPortsCard v-if="project.live" @use="openChannelCreate" />
 
     <!-- 新建/编辑通道 -->
     <ChannelFormModal
@@ -408,18 +556,18 @@ onMounted(() => {
     />
 
     <!-- 添加设备 -->
-    <ModalShell v-if="showForm" title="添加设备" subtitle="设备 ID 是 tag 前缀，添加后不可与已有设备重复" :width="560" @close="showForm = false">
-      <div v-if="!project.channels.length || !project.packages.length" class="banner warn mb-12">
+    <ModalShell v-if="showForm" title="添加设备" subtitle="设备 ID 是 tag 前缀，添加后不可与已有设备重复" :width="560" @close="!saving && (showForm = false)">
+      <div v-if="!compatiblePackages.length" class="banner warn mb-12">
         <AppIcon name="alert" :size="16" />
         <span>
-          {{ !project.channels.length ? '还没有可用通道。' : '' }}
-          {{ !project.packages.length ? '还没有已安装的设备包。' : '' }}
+          当前通道没有兼容的设备包。
         </span>
+        <n-button size="tiny" quaternary @click="router.push('/packages')">前往设备包</n-button>
       </div>
       <div class="form-grid">
         <div class="field span-2">
           <label>通道</label>
-          <n-select v-model:value="form.channelId" :options="channelOptions" placeholder="选择串口通道" />
+          <n-select v-model:value="form.channelId" :options="channelOptions" placeholder="选择采集通道" />
         </div>
         <div class="field span-2">
           <label>设备包</label>
@@ -439,9 +587,10 @@ onMounted(() => {
           <n-input v-model:value="form.name" placeholder="1# 进线电表" />
         </div>
       </div>
+      <p v-if="saveError" class="banner danger mt-12" role="alert">{{ saveError }}</p>
       <template #footer>
-        <n-button size="small" @click="showForm = false">取消</n-button>
-        <n-button size="small" type="primary" :loading="saving" :disabled="!project.channels.length || !project.packages.length" @click="save">
+        <n-button size="small" :disabled="saving" @click="showForm = false">取消</n-button>
+        <n-button size="small" type="primary" :loading="saving" :disabled="!project.live || !form.packageId" @click="save">
           添加
         </n-button>
       </template>

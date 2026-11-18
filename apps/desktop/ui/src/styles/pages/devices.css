@@ -1,0 +1,318 @@
+/* ==========================================================================
+   planM · 设备页：通道分组 / 设备卡片 / 串口枚举 / 从站扫描
+   ========================================================================== */
+
+/* —— 串口枚举 / 从站扫描 —— */
+
+.ports-card {
+  margin-top: 2px;
+}
+
+.port-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.port-row {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 18px;
+  border-bottom: 1px solid var(--line-soft);
+  transition: background var(--dur-1) var(--ease-out);
+}
+
+.port-row:hover {
+  background: var(--row-hover-bg);
+}
+
+.port-row:last-child {
+  border-bottom: 0;
+}
+
+.port-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.port-desc {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.port-desc span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hw-id {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-soft);
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.port-empty {
+  padding: 22px 18px;
+  font-size: 12px;
+}
+
+.scan-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+}
+
+.scan-result {
+  margin-top: 14px;
+}
+
+.scan-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.scan-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 3px 10px;
+  border: 1px solid var(--good-line);
+  background: rgb(var(--rgb-good) / 0.07);
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+/* —— 通道分组 —— */
+
+.channel-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.group-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--bg-1);
+}
+
+.devices-page { width: min(100%, 1280px); }
+
+.devices-page .toolbar {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+}
+
+.group-icon, .device-glyph {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.group-identity { min-width: 0; }
+.group-identity small { color: var(--text-3); font-size: 11px; overflow-wrap: anywhere; }
+
+.group-head h3 {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.group-head code {
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.group-frame {
+  font-size: 10.5px;
+  color: var(--text-3);
+  letter-spacing: 0.04em;
+}
+
+.group-empty {
+  padding: 4px 2px;
+  font-size: 12px;
+}
+
+/* —— 设备卡片 —— */
+
+.device-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 278px), 1fr));
+  gap: 14px;
+}
+
+.device-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 15px;
+  transition: border-color var(--dur-2) var(--ease-out), transform var(--dur-2) var(--ease-out),
+    box-shadow var(--dur-2) var(--ease-out);
+}
+
+.device-card:hover {
+  border-color: var(--line-strong);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-2);
+}
+
+.device-top {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+/* 标题可点击：打开设备工作区 */
+.device-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+  line-height: 1.35;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.device-title strong {
+  font-size: 13.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color var(--dur-1) var(--ease-out);
+}
+
+.device-title:hover strong {
+  color: var(--accent);
+}
+
+.device-title code {
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.slave-badge {
+  padding: 1px 7px;
+  border-radius: 5px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  color: var(--text-2);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.device-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px 12px;
+  padding: 10px 11px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--inset-bg);
+  font-size: 11.5px;
+}
+
+.device-meta > div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.device-meta .label {
+  color: var(--text-3);
+  font-size: 10.5px;
+  flex: none;
+}
+
+.device-pkg {
+  grid-column: span 2;
+}
+
+.device-pkg > span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.device-setup { display: grid; gap: 12px; justify-items: start; }
+.device-setup h3, .device-verification h3 { font-size: 15px; font-weight: 650; }
+.device-setup p { color: var(--text-2); font-size: 13px; }
+.setup-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.setup-steps li {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-size: 12px;
+}
+.setup-steps li.done { color: var(--good-strong); }
+.device-verification { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.device-verification .group-identity { flex: 1; min-width: 170px; }
+
+.device-grid-list { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+.device-grid-list .device-card {
+  display: grid;
+  grid-template-columns: minmax(130px, 1.15fr) minmax(140px, 1.5fr) auto;
+  align-items: center;
+  column-gap: 14px;
+  row-gap: 8px;
+  padding: 8px 12px;
+}
+.device-grid-list .device-meta { padding: 0; background: transparent; border: 0; gap: 3px 8px; }
+.device-grid-list .device-foot { margin-top: 0; }
+.device-grid-list .device-card > .banner { grid-column: 1 / -1; grid-row: 2; }
+.device-grid-list .device-glyph { width: 26px; height: 26px; }
+@media (max-width: 860px) {
+  .device-grid-list .device-card { grid-template-columns: minmax(130px, 1fr) auto; }
+  .device-grid-list .device-meta { grid-column: 1 / -1; grid-row: 2; }
+  .device-grid-list .device-card > .banner { grid-row: 3; }
+}

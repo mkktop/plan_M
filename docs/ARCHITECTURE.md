@@ -71,7 +71,7 @@ trait Driver {
 }
 ```
 
-- `compile` 把点表与实例覆盖编译成 `PollGroup`（周期 + tags + 驱动私有 `PlanPayload`）。
+- 网关先由驱动计算生效点表。`compile` 用这份点表生成 `PollGroup`（周期 + tags + 驱动私有 `PlanPayload`），同一份点表供运行时写入使用。
   读块合并、位展开、字节序解析全部在驱动内。
 - `poll` 只执行一个组；成功返回 `Sample { tag, value, quality }`，由 gateway 写入 TagHub。
 - 驱动必须无设备状态：所有状态放在 plan 里，驱动实例可跨通道共享。
@@ -131,7 +131,8 @@ BLE 可用 MAC；其他协议可用任意稳定标识。
 - `transports` 缺省 = 驱动的全部传输；安装时校验「包声明 ⊆ 驱动能力」。
 - `params` 由驱动解释。Modbus 支持 `framing: auto|rtu|tcp`
   （`auto` = 串口/SIM 用 RTU、TCP 用 MBAP；`rtu` 可支持 TCP 转 485 网关）。
-- 点地址：`"address": "40101"` 或对象 `{ "ble": { ... } }`。字符串只接受寄存器记法。
+- Modbus 点地址使用寄存器字符串，例如 `"address": "40101"`。固定帧点地址使用包含读写帧和偏移的对象。
+  完整字段见 [设备接入与固定帧配置](DEVICE_INTEGRATION.md)。
 
 ## 5. 运行时数据流
 
@@ -151,6 +152,8 @@ config.json
 
 写点：`GatewayService::write_tag` 做通用校验（access/min/max/step/enum）→
 `driver.write` 自行编码（Modbus 驱动按寄存器/线圈与字节序编码）。
+
+导入已在使用的设备包新版本时，网关先试编译受影响的实例，再发布包并重建相关通道。切换期间写入等待配置生效。历史版本可在设备包页的「版本管理」中启用，选择随工程数据保存。旧串口工程的 `port` 和 `slave` 字段在加载时转换，下一次保存工程配置时使用新版结构。
 
 ## 6. 认证与安全边界
 

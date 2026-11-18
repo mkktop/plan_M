@@ -7,7 +7,7 @@ use hmi_domain::addr::{RegAddr, RegArea};
 use hmi_domain::codec::{apply_scale, decode_registers, extract_bit, ByteOrder};
 use hmi_domain::driver::{CompileInput, DevicePlan, DriverError, PlanPayload, PollGroup, Sample};
 use hmi_domain::link::TransportKind;
-use hmi_domain::points::{apply_overrides, PointAddress, PointDef};
+use hmi_domain::points::{PointAddress, PointDef};
 use hmi_domain::value::{Quality, TagId, Value};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -111,7 +111,8 @@ pub enum MapKind {
 /// 编译入口。
 pub fn compile(input: &CompileInput<'_>) -> Result<DevicePlan, DriverError> {
     let params: ModbusParams = input.protocol.params_as().map_err(DriverError::Compile)?;
-    let (table, mut warnings) = apply_overrides(input.points, input.overrides);
+    let table = input.points;
+    let mut warnings = Vec::new();
 
     for p in &table.points {
         if !matches!(p.address, PointAddress::Register(_)) {
@@ -361,13 +362,15 @@ mod tests {
         params: serde_json::Value,
     ) -> DevicePlan {
         let d = decl(params);
-        compile(&CompileInput {
+        let (points, warnings) = hmi_domain::points::apply_overrides(t, &ov);
+        let mut plan = compile(&CompileInput {
             device_id: "dev1",
-            overrides: &ov,
-            points: t,
+            points: &points,
             protocol: &d,
         })
-        .unwrap()
+        .unwrap();
+        plan.warnings.extend(warnings);
+        plan
     }
 
     fn group_plan(g: &PollGroup) -> &ModbusGroupPlan {
@@ -525,7 +528,6 @@ mod tests {
         let d = decl(serde_json::json!({}));
         let r = compile(&CompileInput {
             device_id: "dev1",
-            overrides: &Default::default(),
             points: &t,
             protocol: &d,
         });

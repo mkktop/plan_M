@@ -17,12 +17,12 @@ ui/               Vue 3 + TS + Vite + Pinia + Naive UI（仅表单）
   src/api/bridge.ts 服务端消息 → Pinia 的唯一分发点
   src/stores/       connection / project / tags / dashboards / workspaces / plugins /
                    updates / toast
-  src/pages/        首页 / 诊断 / 全局仪表盘 / 通道 / 设备 / 设备包 / 插件 /
-                   插件页面 / 全局点表 / 设备工作区（/t/:typeId/:pageId?）/ 设置
-  src/components/device/  设备工作区组件：概览 / 参数设置
+  src/pages/        运行总览 / 设备 / 诊断 / 设备包 / 插件 / 设置 /
+                   插件页面 / 设备工作区（/d/:deviceId/:pageId?）
+  src/components/device/  工作区画布、设备概览、参数设置与小组件
   src/utils/devicePages.ts 宿主组件目录、包默认/内置 fallback 页面
   src/plugins/      ESM 插件宿主：动态 import、PluginContext、权限、tag 聚合
-  src/styles/       theme.css（设计系统）+ pages.css（设备包/仪表盘/插件/首页/工作区/设置）
+  src/styles/       tokens.css / base.css / components.css / shell.css / pages/
 ui-plugin-sdk/    插件作者类型定义（SDK v1，index.d.ts；无构建步骤）
 ```
 
@@ -50,7 +50,14 @@ pnpm --dir ui dev
 把 zip/目录直接拖进导入弹窗，或用「选择 zip / 选择目录」（`tauri-plugin-dialog`）。
 
 UI 插件入口由 gatewayd 的 HTTP 静态服务提供（`/plugins/<id>/<entry>`），所以先启动
-`gatewayd serve`，再启动 UI；示例插件：`examples/ui-plugins/meter-card`。
+`gatewayd serve`，再启动 UI。 [示例插件](../../examples/ui-plugins/meter-card)
+
+## 设备接入与数据浏览
+
+- 「设备」按采集通道分组，支持卡片与紧凑列表。空项目按缺项引导创建通道、导入兼容设备包、扫描或手填地址。添加首台设备后，界面提示是否收到有效读数。 [设备接入与固定帧配置](../../docs/DEVICE_INTEGRATION.md)
+- 顶部每个设备标签对应一台实例。「实时点表」留在设备工作区。从设备列表点「数据浏览」时，诊断页的「跨设备数据浏览」直接选中该设备。
+- 网关断开后，设备状态显示待确认，点表保留缓存与末次采样时间，写值入口暂停。握手成功后，状态和读数须等到当前连接的快照和点值消息再恢复。
+- 运行总览的采集点按设备实例汇总，计入位展开子点。
 
 ## 约定
 
@@ -58,27 +65,27 @@ UI 插件入口由 gatewayd 的 HTTP 静态服务提供（`/plugins/<id>/<entry>
   （supervisor 只做进程托管：探测 59120 → 附着或拉起 `gatewayd serve`（无窗口），
   `RunEvent::ExitRequested` 时只回收自己拉起的子进程；二进制查找顺序 =
   应用目录 gatewayd.exe → `target/release`（开发模式）。）
-- 新增 wire 消息要同时改 `crates/wire`、`apps/gatewayd/src/serve.rs`、
-  `ui/src/api/types.ts`，并补 `ws_smoke` 断言。
+- 新增 wire 消息要同时更新 `crates/wire`、`apps/gatewayd/src/serve.rs`、
+  `ui/src/api/types.ts`、API 参考与 `ws_smoke` 断言。 [网关 WebSocket API v2](../../docs/WEBSOCKET_API.md)
 - 设备包/插件删除共用 `valid_id` 白名单（gateway service）：字母数字 + `. - _` 且
   至少一个字母数字 —— 挡住 `.` / `..` 路径穿越；包删除会清 `<packages>/<id>/` 全部
   版本，有设备在用时先拒绝。
 - 页面只读 Pinia，不自己解析服务端消息；订阅只覆盖当前可见设备/看板。
-- **设备工作区**：顶部类型标签 = 已安装设备包（一包一类型）；`/t/:typeId/:pageId?` 页面按类型共享，
-  `?device=` 选实例。页面由包 `ui.pages` 声明（`overview/dashboard/tags/settings`），
-  用户覆盖保存到 `<data-dir>/workspaces.json`；`utils/devicePages.ts` 是组件目录与 fallback。
-  左侧栏在设备模式显示类型页面、系统模式显示全局页面，底部固定「系统」入口。
+- **设备工作区**用 `/d/:deviceId/:pageId?`，旧 `/t/:typeId/:pageId?` 路径保留兼容。
+  页面布局依次读取设备实例覆盖、同型号覆盖、包 `ui.pages` 和宿主预设。
+  工作台和插件页也可分别保存布局覆盖，均写入 `<data-dir>/workspaces.json`。
+  `utils/devicePages.ts` 提供设备组件目录与预设，画布渲染由 `WorkspaceCanvas.vue` 负责。
 - 新增宿主组件 kind 必须同步 `crates/packaging/src/validate.rs` 白名单、
-  `crates/gateway/src/workspaces.rs` 校验、`ui/src/utils/devicePages.ts` 与
-  `DeviceWorkspacePage.vue` 渲染分支。
+  `apps/gatewayd/src/workspaces.rs` 校验、`ui/src/utils/devicePages.ts` 与
+  `DevicePageBlock.vue` 或 `DeviceWidgetCard.vue` 的渲染分支。 [组件协议](../../docs/WIDGET_PROTOCOL.md)
 - 仪表盘布局真值在 gatewayd（`<data-dir>/dashboards.json`）：组件必须带 `layout` 且互不重叠，
   新增组件字段要向后兼容（serde default / TS 可选）。设备工作区看板带
-  `scopeKind="device"` + `scopeId=<device id>`；全局页只看无 scope 的看板。
+  `scopeKind="device"` + `scopeId=<device id>`，无 scope 的看板仍可通过 API 管理。
 - 仪表盘组件契约 `{ id, kind, title, tag, unit, config, layout }` 与插件 widget 同构，
   内置渲染器在 `DashboardPage.vue`；插件组件 kind 为 `plugin:<插件id>:<组件id>`，
   由 `PluginWidget.vue` 挂载 `plugins/host.ts` 动态加载的 ESM；未知 `kind` 显示占位而不是崩溃。
-- 插件不直接开 WebSocket：`ctx.tags.subscribe/read/write` 走宿主同一套 refcount 订阅与鉴权；
-  manifest 未声明的权限会被 runtime 拒绝。入口契约 `export function mount(el, ctx, props)`。
+- 插件通过宿主订阅和写值。v2 组件用 `mountWidget(host)` 与 `host.slots`，v1 入口用
+  `mount(el, ctx, props)` 与 `ctx.tags.subscribe/read/write`。宿主根据清单中的权限检查调用。
 - 改插件 manifest/ctx 契约要同步 `crates/packaging/src/ui_plugin.rs` 校验、
   `ui/src/plugins/host.ts`、`ui/src/api/types.ts`、`ui-plugin-sdk/index.d.ts`。
 - Tauri CSP 放行 `127.0.0.1:59120` 的脚本/连接/图片；改 CSP 后用 `pnpm tauri dev` 实测插件加载。

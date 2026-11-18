@@ -34,7 +34,7 @@ export function installGatewayBridge(): void {
         void plugins.refresh().catch((e) => {
           console.warn('拉取 UI 插件失败', e)
         })
-        void workspaces.load().catch((e) => {
+        void workspaces.load(true).catch((e) => {
           console.warn('拉取设备工作区失败', e)
         })
         break

@@ -1,4 +1,4 @@
-//! 设备类型工作区：`<data-dir>/workspaces.json`。
+//! 项目、设备型号、设备实例与插件页面的布局覆盖。
 //!
 //! 设备包声明默认页面；这里保存用户对某个类型的覆盖（页面增删/排序/组件组合）。
 //! 没有记录时 UI 使用设备包默认页面。布局属工程数据，UI 重装/换机不丢。
@@ -70,31 +70,31 @@ impl WorkspaceStore {
     /// 新建或覆盖同类型工作区，成功后落盘。
     pub fn upsert(&mut self, workspace: WorkspaceDto) -> Result<(), String> {
         validate_workspace(&workspace)?;
-        match self
-            .workspaces
+        let mut updated = self.workspaces.clone();
+        match updated
             .iter_mut()
             .find(|w| w.device_type == workspace.device_type)
         {
             Some(slot) => *slot = workspace,
-            None => self.workspaces.push(workspace),
+            None => updated.push(workspace),
         }
-        self.persist()
+        self.persist(updated)
     }
 
     /// 删除类型覆盖（回落到包默认页面）；不存在视为成功。
     pub fn remove(&mut self, device_type: &str) -> Result<(), String> {
-        let before = self.workspaces.len();
-        self.workspaces.retain(|w| w.device_type != device_type);
-        if self.workspaces.len() == before {
+        let mut updated = self.workspaces.clone();
+        updated.retain(|w| w.device_type != device_type);
+        if updated.len() == self.workspaces.len() {
             return Ok(());
         }
-        self.persist()
+        self.persist(updated)
     }
 
-    fn persist(&self) -> Result<(), String> {
+    fn persist(&mut self, workspaces: Vec<WorkspaceDto>) -> Result<(), String> {
         let file = WorkspaceFile {
             version: SCHEMA_VERSION,
-            workspaces: self.workspaces.clone(),
+            workspaces,
         };
         let text =
             serde_json::to_string_pretty(&file).map_err(|e| format!("序列化工作区失败：{e}"))?;
@@ -103,25 +103,25 @@ impl WorkspaceStore {
         }
         let tmp = self.path.with_extension("json.tmp");
         std::fs::write(&tmp, text).map_err(|e| format!("写入临时文件失败：{e}"))?;
-        // Windows 上 rename 不能覆盖已存在文件；先删旧文件。
-        #[cfg(windows)]
-        {
-            if self.path.exists() {
-                let _ = std::fs::remove_file(&self.path);
-            }
-        }
         std::fs::rename(&tmp, &self.path).map_err(|e| format!("替换文件失败：{e}"))?;
+        self.workspaces = file.workspaces;
         Ok(())
     }
 }
 
 /// 校验用户保存的工作区。页面组件 kind 必须是宿主认识的组件。
 pub fn validate_workspace(w: &WorkspaceDto) -> Result<(), String> {
-    if !valid_device_type(&w.device_type) {
-        return Err(format!(
-            "设备类型 `{}` 非法（应为小写点分包 id，如 com.acme.pm3000）",
-            w.device_type
-        ));
+    let plugin_page = valid_plugin_page(&w.device_type);
+    let system = w.device_type == "system" || plugin_page;
+    let instance = w
+        .device_type
+        .strip_prefix("device:")
+        .is_some_and(valid_page_id);
+    if !system && !instance && !valid_device_type(&w.device_type) {
+        return Err(format!("布局作用域 `{}` 无效", w.device_type));
+    }
+    if plugin_page && (w.pages.len() != 1 || w.pages[0].id != "page") {
+        return Err("插件页面布局必须包含唯一的 page 页面".into());
     }
     if w.pages.is_empty() {
         return Err("工作区至少需要一个页面".into());
@@ -168,7 +168,9 @@ pub fn validate_workspace(w: &WorkspaceDto) -> Result<(), String> {
             return Err(e);
         }
         for comp in &page.components {
-            if !allowed_component_kind(&comp.kind) {
+            if !(allowed_component_kind(&comp.kind)
+                || system && allowed_system_component(&comp.kind))
+            {
                 return Err(format!(
                     "页面 `{}` 使用了未知组件 `{}`（核心组件、`plugin:<插件id>:<组件id>` 或 `<包id>:<组件短名>`）",
                     page.id, comp.kind
@@ -206,6 +208,12 @@ pub fn validate_workspace(w: &WorkspaceDto) -> Result<(), String> {
                             page.id, comp.kind
                         ));
                     }
+                    if system && has_point {
+                        return Err(format!(
+                            "页面 `{}` 的槽位 `{slot}` 必须选择具体设备点位",
+                            page.id
+                        ));
+                    }
                     if b.bit.is_some() && !has_point {
                         return Err(format!(
                             "页面 `{}` 的组件 `{}` 槽位 `{slot}`：bit 只能与 point 组合",
@@ -225,6 +233,28 @@ pub fn validate_workspace(w: &WorkspaceDto) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn allowed_system_component(kind: &str) -> bool {
+    matches!(
+        kind,
+        "system:home"
+            | "system:devices"
+            | "system:diagnostics"
+            | "system:packages"
+            | "system:plugins"
+            | "system:settings"
+    ) || valid_plugin_page(kind)
+}
+
+fn valid_plugin_page(kind: &str) -> bool {
+    let Some((plugin, page)) = kind
+        .strip_prefix("system-plugin:")
+        .and_then(|key| key.split_once(':'))
+    else {
+        return false;
+    };
+    hmi_packaging::ui_plugin::valid_plugin_id(plugin) && valid_page_id(page)
 }
 
 /// 组件 kind 形态校验：核心组件 / `plugin:<插件id>:<组件id>` / `<包id>:<组件短名>`。
@@ -329,6 +359,40 @@ mod tests {
         store.upsert(changed.clone()).unwrap();
         assert_eq!(store.list().len(), 1);
         assert_eq!(store.get("com.acme.pm3000").unwrap(), &changed);
+    }
+
+    #[test]
+    fn workspace_scopes_persist_independently() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = workspaces_path(tmp.path());
+        let mut store = WorkspaceStore::load(&path);
+        let instance = WorkspaceDto {
+            device_type: "device:pm1".into(),
+            pages: vec![page("custom", "core:text")],
+        };
+        let system = WorkspaceDto {
+            device_type: "system".into(),
+            pages: vec![page("fleet", "system:diagnostics")],
+        };
+        let plugin_kind = "system-plugin:Vendor.Gauge_v2:tools";
+        let plugin = WorkspaceDto {
+            device_type: plugin_kind.into(),
+            pages: vec![page("page", plugin_kind)],
+        };
+        for workspace in [sample(), instance.clone(), system.clone(), plugin.clone()] {
+            store.upsert(workspace).unwrap();
+        }
+        store.remove("device:pm1").unwrap();
+        let reloaded = WorkspaceStore::load(path);
+        assert!(reloaded.get("device:pm1").is_none());
+        assert_eq!(reloaded.get("com.acme.pm3000"), Some(&sample()));
+        assert_eq!(reloaded.get("system"), Some(&system));
+        assert_eq!(reloaded.get(plugin_kind), Some(&plugin));
+        assert!(validate_workspace(&WorkspaceDto {
+            pages: system.pages,
+            ..instance
+        })
+        .is_err());
     }
 
     #[test]

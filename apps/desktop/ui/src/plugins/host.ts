@@ -1,4 +1,4 @@
-//! UI 插件宿主：动态 import gatewayd 提供的 ESM 入口，注入受控 `ctx`。
+//! UI 插件宿主：动态加载 gatewayd 提供的 ESM 入口，注入受控 `ctx`。
 //!
 //! 设计要点：
 //! - 插件不直接开 WebSocket；`ctx.tags.subscribe` 统一走宿主的引用计数客户端；
@@ -9,6 +9,7 @@ import { reactive } from 'vue'
 import { gateway } from '@/api/ws'
 import { useTagsStore } from '@/stores/tags'
 import { useToastStore } from '@/stores/toast'
+import { effectiveWidgetConfig } from '@/utils/widgetConfig'
 import type { TagChange, TagValue, UiPluginDto, UiPageDto, UiWidgetDto, WidgetDto } from '@/api/types'
 
 export const PLUGIN_KIND_PREFIX = 'plugin:'
@@ -387,7 +388,7 @@ export function mountPluginWidget(
       title: widget.title,
       tag: widget.tag,
       unit: widget.unit,
-      config: widget.config ?? {},
+      config: effectiveWidgetConfig(hit.widget.configSchema, null, widget.config),
     },
     editing,
   }

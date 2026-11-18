@@ -6,6 +6,10 @@
 「ESM UI 插件」「设备工作区（一个标签 = 一台设备）」与「包编辑器（全程表单建型号）」。
 采集进程可独立常驻运行，桌面壳只是它的 WebSocket 客户端；UI 崩溃/关闭不影响采集。
 
+- 接入设备、配置 Modbus 或厂商固定帧并验证读写。 [设备接入与固定帧配置](docs/DEVICE_INTEGRATION.md)
+- 从第三方客户端完成握手、订阅、扫描和配置。 [网关 WebSocket API v2](docs/WEBSOCKET_API.md)
+- 开发桌面界面、设备页面和插件。 [桌面开发](apps/desktop/README.md) · [组件协议](docs/WIDGET_PROTOCOL.md)
+
 ## 架构
 
 ```
@@ -51,6 +55,7 @@ crates/
 ├─ transport-tcp/     TCP 传输：TcpLink（Modbus TCP / 串口服务器）
 ├─ transport-sim/     进程内虚拟传输：字节管道 + 可插拔应答器
 ├─ driver-modbus/     Modbus 驱动：PDU + RTU/MBAP 帧 + 点表编译 + 内存从站（SimSlave）
+├─ driver-frame/      固定帧驱动，使用设备包声明探测、读取与写入报文
 ├─ packaging/         设备包与 UI 插件：manifest/点表/页面声明解析、语义校验、安装、注册表
 ├─ gateway/           通用运行时：通道监督器、TagHub、服务编排（只产出领域视图，不依赖 wire）
 └─ wire/              gatewayd ↔ UI 的 WS 消息契约（serde，两端共用）
@@ -104,7 +109,7 @@ pnpm --dir ui dev           # http://localhost:1420/?token=<gateway.token 内容
 
 # 5) 真硬件
 gatewayd scan --com COM3 --baud 9600            # 扫总线从站
-gatewayd poll --package examples/packages/pm3000 --com COM3 --slave 1
+gatewayd poll --package examples/packages/pm3000 --com COM3 --address 1
 ```
 
 Tauri 桌面壳会自动读取 `<data-dir>/gateway.token` 与默认端口 59120；浏览器调试模式用
@@ -119,34 +124,30 @@ ws.send(JSON.stringify({type:'subscribe', tags:['pm1.uab','pm1.status.b0']}));
 // → {type:'changes', items:[{tag:'pm1.uab', value:{f64:220.1}, quality:'good', tsMs:...}]}
 ```
 
-## 桌面 UI（第二～五轮）
+## 桌面 UI
 
 Vue 3 + TypeScript + Vite + Pinia；Naive UI 只做表单控件，外壳/表格/弹窗为自绘，便于后续换肤与插件化。
 
 - **设备工作区**：顶部标签按**设备实例**生成（一个标签 = 一台设备），点「+」弹出设备选择器
-  （按总线分组、可搜索）打开/切换标签，标签可关闭并持久化到本地；左侧是该设备所属型号的
-  页面导航，底部固定「系统」入口。同型号设备共享页面，页面由设备包 `ui.pages` 声明，
-  用户可增删/改名/排序页面并组合宿主组件，保存到 `<data-dir>/workspaces.json`。
-  旧类型链接 `/t/<包id>` 自动落到该型号第一台设备，`?device=` 深链直达对应设备。
-- **首页**：Hello 欢迎页（时间问候、连接状态、时钟）、关键统计（在线设备/通道/点位/设备包/插件）、
-  快速入口与设备概览；根路径 `/` 自动进入首页。
-- **诊断**：连接状态、WS 地址/token、`/health` 探测与延迟、运行统计、完整通信日志（收发帧摘要）；
-  第二个标签「数据浏览」是跨设备的实时点表（值/单位/质量/更新时间、状态字位展开、`access=rw` 写值）。
+  （按通道分组、可搜索）打开或切换。当前设备使用 `/d/:deviceId/:pageId?`，左侧显示设备页面，底部有「返回工作台」。
+  布局按设备实例覆盖、同型号共享覆盖、设备包默认值、宿主预设的顺序解析。旧 `/t/<包id>` 路由保留兼容。
+- **首页**展示网关连接、设备在线情况、运行通道、设备包和配置采集点。采集点按设备实例汇总并包含位展开子点。
+  有离线设备时，设备概览默认显示离线设备。点击通道可定位到设备页中的对应分组。
+- **诊断**包含连接状态、`/health` 探测、运行统计、WS 收发摘要和「跨设备数据浏览」。从设备页点「数据浏览」可直接选中该设备。
 - **仪表盘**（宿主组件，仅出现在设备工作区）：12 列网格画布；数值卡 / 开关 / 仪表三种内置组件，
   绑定任意设备 tag；编辑模式拖拽移动、右下角缩放（不允许重叠），改动防抖自动保存到 gatewayd
   （`<data-dir>/dashboards.json`）；开关只对 `access=rw` 的寄存器/线圈点可操作，值来自订阅回读而非本地猜测。
   设备包页面通过 `kind: "dashboard"` 引用它，按 `scopeKind/scopeId` 只展示当前设备的看板；
-  跨设备的全局组态尚未提供（预留 `scope=null` 的看板数据）。
-- **设备**：按总线（串口通道）分组，组头即总线状态/帧格式/扫描/编辑入口；组内从站卡片显示在线状态、
-  设备包版本与点位数，支持添加/删除设备、从扫描结果或设备包页带着型号/从站预填添加；页底为「本机串口」
-  枚举（含硬件 ID），可直接用某个口建通道。
+  工作台可另建跨设备页面，并通过组件槽位绑定各设备的点。
+- **设备**按通道分组，支持卡片和紧凑列表。空项目按需引导创建通道、导入兼容设备包、扫描或手填地址、确认首个有效读数。
+  页底提供本机串口和硬件 ID，可用对应串口建通道。 [设备接入与固定帧配置](docs/DEVICE_INTEGRATION.md)
 - **设备包**：已安装包列表、点表预览（地址/类型/单位/换算/读写/位展开）、在用设备数；
   桌面版支持 **zip/目录拖放** 与文件对话框，浏览器调试模式用 gatewayd 本机路径；导入失败逐字段内联展示，
   成功后自动选中新包并可直接添加设备。
 - **插件**：已安装 ESM UI 插件列表（版本/权限/贡献点/加载状态）、zip/目录导入与移除；
   插件贡献的导航页自动出现在侧栏，插件组件自动进入仪表盘「组件类型」下拉框。
-- **实时点表**（宿主组件，设备工作区）：按设备查看点位；只订阅当前设备的 tag（bit 子 tag 一并订阅），
-  值/单位/质量/更新时间，状态字位展开为芯片，`access=rw` 的点可写值（工程量，gatewayd 负责反算 scale/offset）。
+- **实时点表**留在当前设备工作区，展示读数、单位、质量和采样时间。网关断开后，设备状态待确认，已有读数标明缓存和末次采样时间。
+  `access=rw` 点按工程量写入，网关重新同步后恢复写值入口。
 - **设置**：连接（WS 地址/token 编辑，从诊断页迁移）+ 应用与更新（当前版本、检查更新、
   下载进度、安装并重启、打开发布页）；更新命令在 `src-tauri/src/updates.rs`。
 
@@ -285,11 +286,11 @@ Tauri 侧只加了一个 `tauri-plugin-dialog`（文件/目录选择）与 `gate
   位绑定采用“读父点整字 → 改位 → 写回”，点带 `scale/offset` 时拒绝位写（请直接写父点）。
 - **ESM 组件统一宿主**：v2 组件在 ShadowRoot 里挂载，只通过 `host.slots` 取/写值，
   样式只用宿主注入的 `--pm-color-*` 变量；v1 插件（`mount(el, ctx, props)`）继续在 light DOM 兼容运行。
-- 页面按**类型共享**；用户在工作区点「编辑页面」可增删页面、改名、排序，并在页面里组合组件。
-- 用户修改保存到 `<data-dir>/workspaces.json`；「恢复包默认页面」会删除该类型覆盖。
+- 在设备工作区「编辑页面」可选择当前实例或同型号设备，再增删、排序页面和编辑组件。
+- 用户修改保存到 `<data-dir>/workspaces.json`。恢复布局会删除当前编辑作用域的覆盖并回落到上一级。
 - 包升级不会自动覆盖已保存的自定义页面；需要新默认页面时点恢复。
 - 顶部设备标签 = 已打开的设备实例（一个标签一台设备）；「+」弹出选择器，设备删除后标签自动清掉。
-- 设备实例切换只影响组件数据；仪表盘按实例独立保存（`DashboardDto.scopeKind=device`）。
+- 切换设备会加载其有效页面布局与数据。仪表盘按实例独立保存（`DashboardDto.scopeKind=device`）。
 
 ### 包内 ESM 组件（设备包）
 
@@ -393,41 +394,9 @@ export function mount(el, ctx, props) {
 - **失败可退化**：入口加载失败或插件被删除时，仪表盘组件显示占位符，布局与其它组件不受影响。
 - 示例见 `examples/ui-plugins/meter-card`；类型定义见 `apps/desktop/ui-plugin-sdk/index.d.ts`。
 
-## WS 协议（摘要，完整见 `crates/wire`）
+## WebSocket API
 
-客户端 → 服务端：`hello{token}` / `getSnapshot` / `subscribe{tags}` / `unsubscribe` /
-`writeTag{tag,value}` / `scanChannel{channel,driver?,range?}` / `getTransportTargets{transport}` /
-`getPackages` / `upsertChannel{config}` / `removeChannel` / `addDevice{config}` / `removeDevice` /
-`importPackage{path}` /
-`removePackage{id}`（有设备在用时拒绝）/
-`getDashboards` / `saveDashboard{dashboard}` / `removeDashboard{id}` /
-`getUiPlugins` / `importUiPlugin{path}` / `removeUiPlugin{id}` /
-`getWorkspaces` / `saveWorkspace{workspace}` / `removeWorkspace{deviceType}` /
-`validatePackage{manifest,points}` / `installDraftPackage{manifest,points}` /
-`exportPackage{manifest,points,dir}`
-
-服务端 → 客户端：`welcome{hostVersion,apiVersion,transports,drivers}` / `snapshot` /
-`changes{items}`（10~20ms 合并批量）/ `channelState` / `deviceState` / `scanProgress` /
-`scanDone{found: DeviceAddress[]}` / `transportTargets` / `packages` / `dashboards` /
-`uiPlugins` / `workspaces` / `packageValidation{errors,warnings}` / `commandOk` / `error`
-
-仪表盘布局（`DashboardDto`）：`{ id, name, cols, scopeKind?, scopeId?, widgets[] }`；widget 为
-`{ id, kind, title, tag, unit, config, layout{x,y,w,h} }`。`config` 由组件自行解释
-（内置 value=`decimals`、switch=`onLabel/offLabel`、gauge=`min/max`，插件组件由插件解释）。
-`scopeKind/scopeId` 缺省 = 系统全局看板；`device` = 某台设备工作区看板。
-gatewayd 保存时校验 id/边界/**组件不重叠**/scope，布局属工程数据，UI 可重装。
-
-UI 插件（`UiPluginDto`）：`{ id, name, version, sdkVersion, permissions[], entry, widgets[], pages[], devicePanels[] }`。
-`getUiPlugins/importUiPlugin/removeUiPlugin` 统一以 `uiPlugins` 返回完整列表；安装支持目录或 zip。
-
-设备工作区（`WorkspaceDto`）：`{ deviceType, pages[] }`；page 为
-`{ id, title, icon, components[{ id?, kind, title, bind?, rect?, config }] }`，组件绑定为
-`{ 槽位: { point, bit } | { tag } | 声明数组 }`，`rect` 为 `{ x, y, w, h }`（12 列网格）。
-`deviceType` 是设备包 id；`getWorkspaces/saveWorkspace/removeWorkspace` 统一以 `workspaces` 返回完整列表。
-`PackageDto.ui.pages` 提供包默认页面，`PackageDto.ui.widgets` 提供包内 ESM 组件声明
-（`{ id, title, entry, size, bindings, config, permissions }`，全局 kind = `<包id>:<id>`），
-`workspaces` 保存用户覆盖。组件 kind 校验为「核心组件 + 本包 ui.widgets + `plugin:` 形态」，
-插件/包是否存在由渲染时解析（缺组件显示占位卡，不阻塞页面保存）。
+当前接口版本为 v2。握手、实时订阅、写值、扫描、设备包管理和布局接口的请求与响应，以及可运行的 Node.js 示例，见独立参考。 [网关 WebSocket API v2](docs/WEBSOCKET_API.md)
 
 ## 发版与更新
 
@@ -488,7 +457,7 @@ GitHub Actions（与 pika_client 同一套机制）：
 - 常驻驻留（托盘/开机自启）与 Windows 服务模式留到后续轮次
 - 浏览器调试模式导入设备包需要 gatewayd 本机路径；拖放/文件对话框只在桌面壳内可用
 - 仪表盘布局是「最后写入者胜」，多人同时编辑同一看板不做冲突合并
-- 设备类型 = 设备包；同一类型共享页面配置，但仪表盘按设备实例独立保存
+- 设备类型对应设备包。实例可以覆盖同型号的共享页面，仪表盘按实例独立保存
 - 用户保存的工作区页面不会随设备包升级自动合并；需要新默认页面时点「恢复包默认页面」
 - 历史/报警未落库（SQLite 已留好位置）
 - `scanChannel` 在 WS 会话内同步执行（几十秒级；扫描期间该连接的其他请求会排队）

@@ -18,6 +18,8 @@ export interface HostDeviceComponent {
   label: string
   icon: string
   description: string
+  category?: '控制' | '布局'
+  slot?: 'value' | 'values'
 }
 
 export const HOST_DEVICE_COMPONENTS: HostDeviceComponent[] = [
@@ -26,60 +28,121 @@ export const HOST_DEVICE_COMPONENTS: HostDeviceComponent[] = [
     label: '设备概览',
     icon: 'pulse',
     description: '在线状态、通道/从站、质量统计与最近更新',
+    category: '布局',
   },
   {
     kind: 'core:dashboard',
     label: '仪表盘',
     icon: 'layout',
     description: '当前设备的组件画布（每个实例独立布局）',
+    category: '布局',
   },
   {
     kind: 'core:tags',
     label: '实时点表',
     icon: 'grid',
     description: '当前设备的实时值、质量与写值',
+    category: '布局',
   },
   {
     kind: 'core:settings',
     label: '参数设置',
     icon: 'settings',
     description: '设备实例名称、通道、从站与 overrides',
+    category: '布局',
   },
   {
     kind: 'core:value',
     label: '数值卡',
     icon: 'activity',
     description: '绑定一个点位/位，显示工程量、质量与更新时间',
+    slot: 'value',
   },
   {
     kind: 'core:gauge',
     label: '仪表',
     icon: 'pulse',
     description: '绑定一个数值点，按 min/max 显示弧线刻度',
+    slot: 'value',
+  },
+  {
+    kind: 'core:trend',
+    label: '实时趋势',
+    icon: 'chart',
+    description: '显示一个数值点最近收到的有效数据',
+    slot: 'value',
+  },
+  {
+    kind: 'core:level',
+    label: '量程条',
+    icon: 'level',
+    description: '按上下限展示当前数值在量程中的位置',
+    slot: 'value',
+  },
+  {
+    kind: 'core:readings',
+    label: '多点读数',
+    icon: 'list',
+    description: '在一张卡片中并列展示多个点位的值、单位和质量',
+    slot: 'values',
+  },
+  {
+    kind: 'core:indicator',
+    label: '状态指示灯',
+    icon: 'lamp',
+    description: '绑定布尔点、状态位或非零数值，只读显示当前状态',
+    slot: 'value',
+  },
+  {
+    kind: 'core:threshold',
+    label: '区间监视',
+    icon: 'alert',
+    description: '读数低于下限或高于上限时高亮提示',
+    slot: 'value',
+  },
+  {
+    kind: 'core:stats',
+    label: '读数统计',
+    icon: 'chart',
+    description: '显示最近有效读数的最小值、均值与最大值',
+    slot: 'value',
+  },
+  {
+    kind: 'core:text',
+    label: '说明与分区',
+    icon: 'text',
+    description: '添加段落、操作说明或区块标题',
+    category: '布局',
   },
   {
     kind: 'core:switch',
     label: '开关',
     icon: 'power',
     description: '绑定一个可写布尔点/位，点击即写入',
+    category: '控制',
+    slot: 'value',
   },
   {
     kind: 'core:input',
     label: '输入',
     icon: 'edit',
     description: '按点表 min/max/step/enum 生成数值或枚举写入',
+    category: '控制',
+    slot: 'value',
   },
   {
     kind: 'core:bits',
     label: '状态位',
     icon: 'grid',
     description: '绑定一个字点，按 bits 定义展示各位状态',
+    slot: 'value',
   },
   {
     kind: 'core:group',
     label: '组合容器',
     icon: 'layout',
     description: '把若干小组件按 12 列网格组合成一块（声明式，无代码）',
+    category: '布局',
   },
 ]
 
@@ -258,6 +321,13 @@ export function normalizeComponentKind(kind: string): string {
 const CORE_WIDGET_KINDS = [
   'core:value',
   'core:gauge',
+  'core:trend',
+  'core:level',
+  'core:readings',
+  'core:indicator',
+  'core:threshold',
+  'core:stats',
+  'core:text',
   'core:switch',
   'core:input',
   'core:bits',
@@ -266,6 +336,7 @@ const CORE_WIDGET_KINDS = [
 
 /** 外部组件：`plugin:<插件id>:<组件id>` 或 `<包id>:<组件短名>`。 */
 export function isExternalWidgetKind(kind: string): boolean {
+  if (kind.startsWith('system:') || kind.startsWith('system-plugin:')) return false
   if (!kind.includes(':')) return false
   if (kind.startsWith('core:')) return false
   if (kind.startsWith('plugin:')) {
@@ -284,8 +355,16 @@ export function isCompactWidgetKind(kind: string): boolean {
 
 /** 组件的默认网格尺寸（编辑器的“网格布局”用）。 */
 export function defaultWidgetSize(kind: string): { w: number; h: number } {
+  if (kind.startsWith('system:') || kind.startsWith('system-plugin:')) return { w: 12, h: 9 }
   if (isExternalWidgetKind(kind)) return { w: 6, h: 3 }
   switch (normalizeComponentKind(kind)) {
+    case 'core:trend':
+    case 'core:readings':
+      return { w: 6, h: 3 }
+    case 'core:stats':
+      return { w: 5, h: 2 }
+    case 'core:text':
+      return { w: 12, h: 2 }
     case 'core:input':
     case 'core:bits':
       return { w: 4, h: 2 }
@@ -345,7 +424,7 @@ export function resolveBoundTag(
   const absolute = typeof first.tag === 'string' ? first.tag.trim() : ''
   if (absolute) return absolute
   const point = typeof first.point === 'string' ? first.point.trim() : ''
-  if (!point) return ''
+  if (!point || !deviceId) return ''
   const bit = typeof first.bit === 'number' ? `.b${first.bit}` : ''
   return `${deviceId}.${point}${bit}`
 }

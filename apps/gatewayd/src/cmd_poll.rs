@@ -81,10 +81,8 @@ pub async fn run(args: PollArgs) -> Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
-    let overrides = Default::default();
     let plan = driver.compile(&CompileInput {
         device_id: "dev",
-        overrides: &overrides,
         points: &pkg.points,
         protocol: &pkg.manifest.protocol,
     })?;

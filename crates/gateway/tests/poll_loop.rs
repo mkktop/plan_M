@@ -76,6 +76,115 @@ fn device(id: &str, address: u32) -> DeviceConfig {
     }
 }
 
+async fn expect_setpoint(service: &GatewayService, expected: f64) {
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if service.current_value("pm1.setpoint").is_some_and(|sample| {
+                sample.quality == Quality::Good && sample.value.as_f64() == Some(expected)
+            }) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "expected {expected}, got {:?}",
+            service.current_value("pm1.setpoint")
+        )
+    });
+}
+
+#[tokio::test]
+async fn instance_overrides_package_upgrade_and_rollback_agree_with_readback() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_pkg(tmp.path());
+    let slave = Arc::new(SimSlave::new().set_holding(309, 250));
+    let factory = Arc::new(SimFactory::new(Arc::new(move |_| {
+        let slave = slave.clone();
+        Arc::new(move |request| slave.respond_rtu(request))
+    })));
+    let driver = Arc::new(ModbusDriver::new());
+    let service = GatewayService::new(
+        tmp.path(),
+        Version::new(0, 1, 0),
+        vec![driver.clone()],
+        vec![factory.clone()],
+    )
+    .unwrap();
+    service.upsert_channel(sim_channel()).await.unwrap();
+    let mut meter = device("pm1", 1);
+    meter
+        .overrides
+        .insert("points.setpoint.scale".into(), json!(0.2));
+    service.add_device(meter.clone()).await.unwrap();
+    expect_setpoint(&service, 50.0).await;
+    service
+        .write_tag("pm1.setpoint", Value::F64(60.0))
+        .await
+        .unwrap();
+    expect_setpoint(&service, 60.0).await;
+    meter.overrides.clear();
+    service.add_device(meter).await.unwrap();
+    expect_setpoint(&service, 30.0).await;
+
+    let src = tempfile::tempdir().unwrap();
+    let original = tmp.path().join("packages/com.test.meter/1.0.0");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(original.join("manifest.json")).unwrap()).unwrap();
+    let mut points: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(original.join("points.json")).unwrap()).unwrap();
+    manifest["version"] = json!("2.0.0");
+    points["points"][3]["scale"] = json!(0.5);
+    std::fs::write(src.path().join("manifest.json"), manifest.to_string()).unwrap();
+    std::fs::write(src.path().join("points.json"), points.to_string()).unwrap();
+    service
+        .import_package(src.path().to_str().unwrap())
+        .await
+        .unwrap();
+    expect_setpoint(&service, 150.0).await;
+    service
+        .write_tag("pm1.setpoint", Value::F64(60.0))
+        .await
+        .unwrap();
+    expect_setpoint(&service, 60.0).await;
+
+    manifest["version"] = json!("3.0.0");
+    manifest["protocol"]["transports"] = json!(["tcp"]);
+    std::fs::write(src.path().join("manifest.json"), manifest.to_string()).unwrap();
+    assert!(service
+        .import_package(src.path().to_str().unwrap())
+        .await
+        .is_err());
+    assert_eq!(
+        service.package_versions("com.test.meter").await.unwrap(),
+        [Version::new(2, 0, 0), Version::new(1, 0, 0)]
+    );
+
+    service
+        .activate_package_version("com.test.meter", &Version::new(1, 0, 0))
+        .await
+        .unwrap();
+    expect_setpoint(&service, 12.0).await;
+    service
+        .write_tag("pm1.setpoint", Value::F64(61.0))
+        .await
+        .unwrap();
+    expect_setpoint(&service, 61.0).await;
+    let restarted = GatewayService::new(
+        tmp.path(),
+        Version::new(0, 1, 0),
+        vec![driver],
+        vec![factory],
+    )
+    .unwrap();
+    assert_eq!(
+        restarted.packages().await[0].manifest.version,
+        Version::new(1, 0, 0)
+    );
+}
+
 #[tokio::test]
 async fn poll_write_and_offline_recovery() {
     let tmp = tempfile::tempdir().unwrap();

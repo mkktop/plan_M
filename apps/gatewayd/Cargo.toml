@@ -15,6 +15,7 @@ hmi-wire = { workspace = true }
 hmi-gateway = { workspace = true }
 hmi-packaging = { workspace = true }
 hmi-driver-modbus = { workspace = true }
+hmi-driver-frame = { workspace = true }
 hmi-transport-serial = { workspace = true }
 hmi-transport-tcp = { workspace = true }
 hmi-transport-sim = { workspace = true }

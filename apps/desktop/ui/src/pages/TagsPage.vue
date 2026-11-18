@@ -13,10 +13,12 @@ import { useProjectStore } from '@/stores/project'
 import { useTagsStore } from '@/stores/tags'
 import { errorMessage, useToastStore } from '@/stores/toast'
 import { nowMs } from '@/utils/clock'
+import { effectivePoint } from '@/utils/devicePoints'
 import type { BitDto, PointDto, Quality, TagValue } from '@/api/types'
 import {
   boolOf,
   formatAge,
+  formatClock,
   isBitArea,
   primitiveOf,
   qualityClass,
@@ -28,6 +30,7 @@ import { addressLabel, addressText, channelSummary } from '@/utils/transport'
 interface BitRow extends BitDto {
   value?: boolean
   quality?: Quality
+  stale: boolean
   text: string
 }
 
@@ -36,7 +39,8 @@ interface Row {
   tag: string
   quality?: Quality
   valueText: string
-  ageMs: number
+  sampleAt?: number
+  stale: boolean
   bits: BitRow[]
 }
 
@@ -58,7 +62,9 @@ const props = withDefaults(
 )
 
 const selectedId = ref('')
-const filter = ref('')
+const deviceFilter = ref('')
+const pointFilter = ref('')
+const issuesOnly = ref(false)
 
 const selected = computed(() => project.devices.find((d) => d.id === selectedId.value) ?? null)
 const selectedPkg = computed(() => project.packageOf(selected.value))
@@ -67,7 +73,7 @@ const selectedChannel = computed(() =>
 )
 
 const filteredDevices = computed(() => {
-  const q = filter.value.trim().toLowerCase()
+  const q = deviceFilter.value.trim().toLowerCase()
   if (!q) return project.devices
   return project.devices.filter(
     (d) => d.id.toLowerCase().includes(q) || d.name.toLowerCase().includes(q),
@@ -77,24 +83,29 @@ const filteredDevices = computed(() => {
 const rows = computed<Row[]>(() => {
   const d = selected.value
   const pkg = selectedPkg.value
-  void nowMs.value // 让相对时间每秒刷新
   if (!d || !pkg) return []
   return pkg.points.map((pt) => {
     const tag = `${d.id}.${pt.id}`
-    const cur = tags.values.get(tag)
+    const cur = tags.get(tag)
+    const live = tags.getLive(tag)
+    const sampleAt = tags.sampleTime(tag)
     return {
-      point: pt,
+      point: effectivePoint(d, pt),
       tag,
-      quality: cur?.quality,
-      valueText: valueText(cur?.value),
-      ageMs: tags.ageMs(tag),
+      quality: live?.quality,
+      valueText: valueText(sampleAt === undefined ? undefined : cur?.value),
+      sampleAt,
+      stale: sampleAt !== undefined && !live,
       bits: pt.bits.map((b) => {
-        const bt = tags.values.get(`${tag}.b${b.bit}`)
-        const v = boolOf(bt?.value)
+        const bitTag = `${tag}.b${b.bit}`
+        const current = tags.getLive(bitTag)
+        const hasSample = tags.sampleTime(bitTag) !== undefined
+        const v = boolOf(hasSample ? tags.get(bitTag)?.value : undefined)
         return {
           ...b,
           value: v,
-          quality: bt?.quality,
+          quality: current?.quality,
+          stale: hasSample && !current,
           text: v === undefined ? '—' : v ? b.on || 'ON' : b.off || 'OFF',
         }
       }),
@@ -102,12 +113,18 @@ const rows = computed<Row[]>(() => {
   })
 })
 
+const pendingCount = computed(() => rows.value.filter((row) => row.stale).length)
+
 const filteredRows = computed(() => {
-  const q = filter.value.trim().toLowerCase()
-  if (!q) return rows.value
-  return rows.value.filter(
-    (r) => r.point.id.toLowerCase().includes(q) || r.point.name.toLowerCase().includes(q),
-  )
+  const q = pointFilter.value.trim().toLowerCase()
+  if (!q && !issuesOnly.value) return rows.value
+  return rows.value.filter((row) => {
+    const matches = !q || [row.point.id, row.point.name, ...row.bits.map((bit) => bit.name)]
+      .some((value) => value.toLowerCase().includes(q))
+    const hasIssue = row.stale || [row.quality, ...row.bits.map((bit) => bit.quality)]
+      .some((quality) => quality && quality !== 'good')
+    return matches && (!issuesOnly.value || hasIssue)
+  })
 })
 
 const tagCount = computed(() => rows.value.reduce((n, r) => n + 1 + r.bits.length, 0))
@@ -117,12 +134,43 @@ const allQualities = computed<Array<Quality | undefined>>(() =>
 const goodCount = computed(() => allQualities.value.filter((q) => q === 'good').length)
 const lostCount = computed(() => allQualities.value.filter((q) => q === 'comm_lost').length)
 
+// —— 数值变化闪动：对比前后快照，变化的主值短暂加 .flash ——
+const valueSnapshot = computed(() => {
+  const m = new Map<string, string>()
+  for (const r of rows.value) m.set(r.tag, r.valueText)
+  return m
+})
+
+const flashing = ref(new Set<string>())
+const flashTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+watch(valueSnapshot, (cur, prev) => {
+  if (!prev) return
+  for (const [tag, text] of cur) {
+    if (text !== '—' && prev.get(tag) !== text) {
+      flashing.value.add(tag)
+      const old = flashTimers.get(tag)
+      if (old) clearTimeout(old)
+      flashTimers.set(
+        tag,
+        setTimeout(() => {
+          flashing.value.delete(tag)
+          flashTimers.delete(tag)
+        }, 600),
+      )
+    }
+  }
+})
+
 const writeOpen = ref(false)
 const writeTarget = ref<Row | null>(null)
 const writeNumber = ref<number | null>(null)
 const writeBool = ref(false)
 const writing = ref(false)
 const writeError = ref('')
+watch([selectedId, () => project.live], () => {
+  writeOpen.value = false
+})
 
 const isBoolPoint = computed(() =>
   writeTarget.value ? isBitArea(writeTarget.value.point.area) : false,
@@ -159,24 +207,12 @@ function resubscribe(): void {
 
 watch([selectedId, selectedPkg], resubscribe)
 
-/** 首次进入按 ?device= 或工作区传入的 deviceId 选中；之后保持用户选择。 */
-let initialQueryApplied = false
 watch(
-  () => project.devices,
-  (list) => {
-    if (!initialQueryApplied && list.length > 0) {
-      initialQueryApplied = true
-      const q = props.deviceId || route.query.device
-      if (typeof q === 'string' && list.some((d) => d.id === q)) selectedId.value = q
-      if (!props.embedded && q) {
-        // 只清掉 device，别把宿主的其他 query（如诊断页的 tab）一起抹掉
-        const rest = { ...route.query }
-        delete rest.device
-        void router.replace({ query: rest })
-      }
-    }
-    if (props.deviceId && list.some((d) => d.id === props.deviceId)) {
-      selectedId.value = props.deviceId
+  [() => project.devices, () => props.deviceId, () => props.embedded ? undefined : route.query.device],
+  ([list, deviceId, requested]) => {
+    const id = deviceId || requested
+    if (typeof id === 'string' && list.some((d) => d.id === id)) {
+      selectedId.value = id
       return
     }
     if (!selectedId.value || !list.some((d) => d.id === selectedId.value)) {
@@ -186,19 +222,22 @@ watch(
   { immediate: true },
 )
 
-watch(
-  () => props.deviceId,
-  (id) => {
-    if (id && project.devices.some((d) => d.id === id)) selectedId.value = id
-  },
-)
+function selectDevice(id: string): void {
+  selectedId.value = id
+  if (route.path === '/diagnostics') {
+    void router.replace({ query: { ...route.query, device: id } })
+  }
+}
 
 onBeforeUnmount(() => {
   dispose?.()
   dispose = null
+  for (const t of flashTimers.values()) clearTimeout(t)
+  flashTimers.clear()
 })
 
 function openWrite(row: Row): void {
+  if (!project.live) return
   const cur = tags.get(row.tag)
   const p = primitiveOf(cur?.value)
   writeTarget.value = row
@@ -210,7 +249,7 @@ function openWrite(row: Row): void {
 
 async function submitWrite(): Promise<void> {
   const row = writeTarget.value
-  if (!row) return
+  if (!row || !project.live) return
   let value: TagValue
   if (isBoolArea(row.point)) {
     value = { bool: writeBool.value }
@@ -257,20 +296,20 @@ function gotoDevices(): void {
       <span class="live-badge"><span class="live-dot" />LIVE</span>
     </PageHeader>
 
-    <div v-if="!conn.connected && !embedded && !hideHeader" class="banner warn">
+    <div v-if="!project.live" class="banner warn" role="status">
       <AppIcon name="alert" :size="16" />
-      <span>未连接 gatewayd，点表不会更新。</span>
-      <n-button size="tiny" quaternary @click="router.push('/diagnostics')">去连接</n-button>
+      <span>{{ conn.connected ? '正在同步数据。' : '网关连接已断开，点表暂停更新。' }}缓存值旁显示末次采样时间。</span>
+      <n-button v-if="!conn.connected" size="tiny" quaternary @click="router.push('/diagnostics')">连接诊断</n-button>
     </div>
 
     <div v-if="project.devices.length" class="tags-layout" :class="{ embedded }">
       <aside v-if="!embedded" class="card device-panel">
         <div class="panel-head">
           <h3>设备</h3>
-          <span class="muted small">{{ project.onlineDeviceCount }}/{{ project.devices.length }} 在线</span>
+          <span class="muted small">{{ project.live ? `${project.onlineDeviceCount}/${project.devices.length} 在线` : '状态待确认' }}</span>
         </div>
-        <n-input v-model:value="filter" size="small" clearable placeholder="搜索设备 / 点位">
-          <template #prefix><AppIcon name="activity" :size="14" /></template>
+        <n-input v-model:value="deviceFilter" size="small" clearable placeholder="搜索设备" aria-label="搜索设备">
+          <template #prefix><AppIcon name="search" :size="14" /></template>
         </n-input>
         <div class="device-list">
           <button
@@ -279,9 +318,9 @@ function gotoDevices(): void {
             type="button"
             class="device-item"
             :class="{ active: d.id === selectedId }"
-            @click="selectedId = d.id"
+            @click="selectDevice(d.id)"
           >
-            <span class="online-dot" :class="{ on: d.online }" />
+            <span class="online-dot" :class="{ on: project.live && d.online }" />
             <span class="device-item-main">
               <strong>{{ d.name || d.id }}</strong>
               <small class="mono">{{ d.id }} · {{ addressLabel(d.address) }}</small>
@@ -296,15 +335,18 @@ function gotoDevices(): void {
         <header class="tags-head">
           <div>
             <div class="row gap-8 align-center">
-              <span class="online-dot" :class="{ on: selected.online }" />
+              <span class="online-dot" :class="{ on: project.live && selected.online }" />
               <h3>{{ selected.name || selected.id }}</h3>
               <span class="slave-badge mono">{{ addressLabel(selected.address) }}</span>
               <span class="muted small">{{ selectedChannel?.name || selected.channelId }} · {{ selectedChannel ? channelSummary(selectedChannel) : '—' }}</span>
             </div>
             <div class="tags-sub muted small">
-              {{ selectedPkg?.name }} v{{ selectedPkg?.version }} · {{ tagCount }} 个 tag ·
-              <span class="text-good">{{ goodCount }} 良好</span>
-              <span v-if="lostCount"> · <span class="text-bad">{{ lostCount }} 失联</span></span>
+              <template v-if="selectedPkg">{{ selectedPkg.name }} v{{ selectedPkg.version }} · {{ tagCount }} 个采集点</template>
+              <template v-if="project.live">
+                · <span class="text-good">{{ goodCount }} 良好</span>
+                <span v-if="lostCount"> · <span class="text-bad">{{ lostCount }} 失联</span></span>
+              </template>
+              <span v-if="pendingCount"> · {{ pendingCount }} 行为缓存值</span>
             </div>
           </div>
           <n-button v-if="!embedded" size="tiny" quaternary @click="router.push({ path: '/devices' })">
@@ -312,6 +354,18 @@ function gotoDevices(): void {
             设备管理
           </n-button>
         </header>
+
+        <div v-if="selectedPkg" class="tags-toolbar">
+          <div class="tags-search">
+            <n-input v-model:value="pointFilter" size="small" clearable placeholder="搜索点位名称或 ID" aria-label="搜索点位">
+              <template #prefix><AppIcon name="search" :size="14" /></template>
+            </n-input>
+          </div>
+          <button type="button" class="filter-chip" :class="{ active: issuesOnly }" :aria-pressed="issuesOnly" @click="issuesOnly = !issuesOnly">
+            只看异常
+          </button>
+          <span class="muted small">{{ filteredRows.length }} / {{ rows.length }} 个点位</span>
+        </div>
 
         <div v-if="!selectedPkg" class="banner warn m-12">
           <AppIcon name="alert" :size="16" />
@@ -323,9 +377,9 @@ function gotoDevices(): void {
             <span>点位</span>
             <span>地址</span>
             <span>类型</span>
-            <span>当前值</span>
+            <span>读数</span>
             <span>质量</span>
-            <span>更新</span>
+            <span>采样</span>
             <span class="align-right">操作</span>
           </div>
           <div v-for="row in filteredRows" :key="row.tag" class="dt-row">
@@ -338,15 +392,18 @@ function gotoDevices(): void {
               <span class="type-chip">{{ typeLabel(row.point) }}</span>
             </div>
             <div class="cell value-cell">
-              <span class="value mono" :class="qualityClass(row.quality)">{{ row.valueText }}</span>
+              <span
+                class="value mono"
+                :class="[qualityClass(row.quality), { flash: !row.stale && flashing.has(row.tag) }]"
+              >{{ row.valueText }}</span>
               <span v-if="row.point.unit" class="unit">{{ row.point.unit }}</span>
               <div v-if="row.bits.length" class="bit-row">
                 <span
                   v-for="b in row.bits"
                   :key="b.bit"
                   class="bit-chip"
-                  :class="[{ on: b.value === true }, qualityClass(b.quality)]"
-                  :title="`${b.name} · ${b.text}${b.quality ? ' · ' + b.quality : ''}`"
+                  :class="[{ on: b.value === true && !b.stale }, qualityClass(b.quality)]"
+                  :title="`${b.name} · ${b.text}${b.stale ? ' · 缓存' : ''}`"
                 >
                   <span class="bit-dot" />
                   {{ b.name }}
@@ -354,10 +411,12 @@ function gotoDevices(): void {
                 </span>
               </div>
             </div>
-            <div class="cell"><QualityPill :quality="row.quality" /></div>
-            <div class="cell mono muted">{{ formatAge(row.ageMs) }}</div>
+            <div class="cell"><QualityPill :quality="row.quality" :stale="row.stale" /></div>
+            <div class="cell mono muted" :title="row.sampleAt ? new Date(row.sampleAt).toLocaleString('zh-CN') : undefined">
+              {{ row.sampleAt ? (row.stale || row.quality === 'comm_lost' ? formatClock(row.sampleAt) : formatAge(nowMs - row.sampleAt)) : '—' }}
+            </div>
             <div class="cell align-right">
-              <n-button v-if="row.point.access === 'rw'" size="tiny" @click="openWrite(row)">写值</n-button>
+              <n-button v-if="row.point.access === 'rw'" size="tiny" :disabled="!project.live" @click="openWrite(row)">写值</n-button>
               <span v-else class="muted small">只读</span>
             </div>
           </div>
@@ -400,7 +459,7 @@ function gotoDevices(): void {
           v-model:value="writeNumber"
           :show-button="false"
           placeholder="输入工程量数值"
-          style="width: 100%"
+          class="w-full"
         />
         <p class="hint">{{ writeHint }}</p>
       </div>

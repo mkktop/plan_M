@@ -1,0 +1,25 @@
+{
+  "pollGroups": [{ "name": "fast", "intervalMs": 100 }],
+  "points": [
+    {
+      "id": "setpoint",
+      "name": "设定值",
+      "type": "u16",
+      "access": "rw",
+      "unit": "W",
+      "scale": 0.5,
+      "min": 0,
+      "max": 1000,
+      "step": 0.5,
+      "pollGroup": "fast",
+      "address": {
+        "read": { "request": "{unit} 10", "responseBytes": 4, "responsePrefix": "{unit} 90" },
+        "valueOffset": 2,
+        "write": {
+          "frame": { "request": "{unit} 11 00 00", "responseBytes": 2, "responsePrefix": "{unit} 91" },
+          "valueOffset": 2
+        }
+      }
+    }
+  ]
+}

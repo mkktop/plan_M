@@ -57,6 +57,8 @@ pub struct UiWidgetDecl {
     pub bindings: BTreeMap<String, WidgetBindingDecl>,
     #[serde(default)]
     pub config: serde_json::Value,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub config_schema: hmi_domain::widget_config::WidgetConfigSchema,
     #[serde(default)]
     pub permissions: Vec<String>,
 }

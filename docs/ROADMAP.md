@@ -1,7 +1,7 @@
 # 路线图与交接文档（Roadmap / Handoff）
 
 > 本文件用于跨会话交接：新会话从这里恢复上下文即可继续开发。
-> 最后更新：2026-11-11（发版机制完成时）。
+> 各开发轮次保留历史记录。当前对接方式见 [设备接入指南](DEVICE_INTEGRATION.md) 和 [网关 WebSocket API v2](WEBSOCKET_API.md)。
 
 ## 0. 一句话背景
 
@@ -62,7 +62,7 @@
 cargo build --workspace
 cargo test --workspace
 cargo run -p hmi-gatewayd -- serve --sim          # 演示模式（自动装示例包 + SIM 总线 + pm1/pm2）
-cargo run -p hmi-gatewayd -- poll --package examples/packages/pm3000 --com SIM --once
+cargo run -p hmi-gatewayd -- poll --package examples/packages/pm3000 --transport sim --once
 cargo run -p hmi-gatewayd -- scan --com COM3
 cargo run -p hmi-gatewayd -- pkg validate examples/packages/pm3000
 
@@ -75,10 +75,8 @@ pnpm --dir ui dev                                 # 浏览器调试：?token=<ga
 - UI 目录：`apps/desktop/ui/src/{api,stores,pages,components,components/device,styles,plugins,utils}`；
   `api/ws.ts` 是协议客户端单例，`api/bridge.ts` 是 WS→Pinia 唯一分发点，
   `plugins/host.ts` 是 ESM 插件宿主，`utils/devicePages.ts` 是设备页面组件目录/fallback。
-  页面：`HomePage / DiagnosticsPage / DashboardPage / ChannelsPage / DevicesPage / PackagesPage /
-  PluginsPage / PluginPage / TagsPage / DeviceWorkspacePage`；
-  设备工作区路由 `/t/:typeId/:pageId?`；根路径 `/` 进入 Hello 首页。
-  `styles/pages.css` 放设备包/仪表盘/插件/首页/工作区专用样式（基础设计系统仍为 `theme.css`）。
+  设备工作区使用 `/d/:deviceId/:pageId?`，根路径 `/` 进入运行总览。
+  当前页面及样式结构见 [桌面开发说明](../apps/desktop/README.md)。
 
 - 服务地址：`http://127.0.0.1:59120/health`、`ws://127.0.0.1:59120/ws`、
   插件清单 `http://127.0.0.1:59120/plugins`
@@ -105,34 +103,23 @@ pnpm --dir ui dev                                 # 浏览器调试：?token=<ga
 
 ### 关键契约速查
 
-- WS 消息：`crates/wire/src/lib.rs`（serde 判别字段 `type`，camelCase）。
-  `ClientMsg`: hello/getSnapshot/subscribe/unsubscribe/writeTag/scanChannel/getSerialPorts/
-  getPackages/upsertChannel/removeChannel/addDevice/removeDevice/importPackage/
-  getDashboards/saveDashboard/removeDashboard/getUiPlugins/importUiPlugin/removeUiPlugin/
-  getWorkspaces/saveWorkspace/removeWorkspace
-  `ServerMsg`: welcome/snapshot/changes/channelState/deviceState/scanProgress/scanDone/
-  serialPorts/packages/dashboards/uiPlugins/workspaces/commandOk/error
+- WS 消息定义在 `crates/wire/src/lib.rs`，使用 camelCase 的 `type` 判别字段。
+  请求与响应对照、扫描规则和可运行示例见 [网关 WebSocket API v2](WEBSOCKET_API.md)。
 - **Value 的 JSON 形状是外部标签枚举**：`{"f64":220.1}` / `{"i64":300}` / `{"bool":true}` /
   `{"str":"..."}`；`TagChange = {tag, value, quality, tsMs}`；quality 字符串
   `good|bad|uncertain|comm_lost`。
-- 快照 DTO 已含 UI 所需字段：`ChannelDto` 带完整串口参数；`PointDto` 带
-  `register/area/type/access/scale/offset/unit/bits[]`。设备上下线是独立的
-  `deviceState` 事件（不再复用 `channelState`）。
+- `ChannelDto` 包含传输配置与状态，`PointDto.address` 是寄存器字符串或驱动私有对象。
+  设备上下线通过独立的 `deviceState` 事件推送。
 - 仪表盘 DTO：`DashboardDto { id, name, cols, scopeKind?, scopeId?, widgets[] }`；
   `WidgetDto { id, kind, title, tag, unit, config, layout{x,y,w,h} }`。
   `config` 为组件私有 JSON（value=`decimals`、switch=`onLabel/offLabel`、gauge=`min/max`），
   插件 widget 复用同一形状。`scopeKind/scopeId` 缺省 = 全局看板，`device` = 设备工作区看板。
   保存时 gatewayd 校验：id 规则、边界、组件不重叠、scope 成对且合法。
   `dashboards` 消息是 get/save/remove 的统一应答（返回完整列表）。
-- 设备包 UI：`PackageDto.ui.pages[]`，page 为
-  `{ id, title, icon, components[{ kind, title, config }] }`；kind 白名单
-  `overview|dashboard|tags|settings`（`ALLOWED_DEVICE_PAGE_COMPONENTS`）。
-  manifest 里同形状（`ui.pages`）；旧包缺省时 UI fallback 四页。
-- 工作区 DTO：`WorkspaceDto { deviceType, pages[] }`（deviceType = 包 id）；
-  `workspaces` 是 get/save/remove 的统一应答。保存到 `<data-dir>/workspaces.json`，
-  校验页面 id/标题/组件白名单/数量。没有记录时使用包默认页面。
-- 设备工作区路由：`/t/:typeId/:pageId?`，实例选择用 `?device=<id>`；
-  顶部类型标签来自已安装包；左侧设备模式显示页面、系统模式显示全局导航，底部固定「系统」入口。
+- 设备包 v2 页面声明使用 `widgets[]`，下发和保存的工作区使用 `components[]`。
+  `WorkspaceDto.deviceType` 可指向设备型号、实例、工作台或插件页面，覆盖写入
+  `<data-dir>/workspaces.json`。 [组件与页面协议](WIDGET_PROTOCOL.md)
+- 设备工作区路由为 `/d/:deviceId/:pageId?`，每个标签对应一个设备实例。
 - `DeviceDto.overrides` 回填参数设置页；保存设置复用 `addDevice`（同 id upsert）。
 - UI 插件 DTO：`UiPluginDto { id, name, version, description, author, sdkVersion, permissions[],
   entry, widgets[], pages[], devicePanels[] }`；`uiPlugins` 是 get/import/remove 的统一应答。
@@ -150,8 +137,8 @@ pnpm --dir ui dev                                 # 浏览器调试：?token=<ga
 - Tauri 命令 `gateway_info`：见 `apps/desktop/src-tauri/src/lib.rs`；
   文件/目录选择走 `tauri-plugin-dialog`（capability `dialog:default` + JS `@tauri-apps/plugin-dialog`）。
 - UI 连接默认值：`ws://127.0.0.1:59120/ws`；浏览器调试用 `?token=&ws=` 覆盖。
-- 设备包格式：`README.md` 的「设备包」一节 + `examples/packages/pm3000/`。
-- 轮询编译：`crates/gateway/src/poll.rs`（间隔≤4 合并、≤125 字/块）。
+- 设备包格式与示例见 [设备接入指南](DEVICE_INTEGRATION.md)。
+- Modbus 轮询编译见 `crates/driver-modbus/src/compile.rs`（间隔≤4 合并、≤125 字/块）。
 - 通道监督器：`crates/gateway/src/supervisor.rs`；实时库：`crates/gateway/src/hub.rs`。
 
 ### 已知边界（有意为之）

@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { NButton, NInput } from 'naive-ui'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { NButton, NInput, NSelect } from 'naive-ui'
 import AppIcon from '@/components/AppIcon.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import ModalShell from '@/components/ModalShell.vue'
@@ -15,11 +15,14 @@ import type { PackageDto, PointDto } from '@/api/types'
 import { addressText } from '@/utils/transport'
 
 const router = useRouter()
+const route = useRoute()
+const deviceSetup = computed(() => route.path === '/packages' && route.query.setup === '1')
 const project = useProjectStore()
 const conn = useConnectionStore()
 const toast = useToastStore()
 
 const selectedId = ref('')
+const packageFilter = ref('')
 const importOpen = ref(false)
 const importPath = ref('')
 const importing = ref(false)
@@ -28,19 +31,62 @@ const dragOver = ref(false)
 const removing = ref(false)
 const removeBusy = ref(false)
 const studioOpen = ref(false)
+const versionPackage = ref<PackageDto | null>(null)
+const versions = ref<string[]>([])
+const nextVersion = ref<string | null>(null)
+const versionBusy = ref(false)
+const versionError = ref('')
+
+async function openVersions(pkg: PackageDto): Promise<void> {
+  versionPackage.value = pkg
+  nextVersion.value = pkg.version
+  versions.value = []
+  versionError.value = ''
+  versionBusy.value = true
+  try {
+    versions.value = await project.packageVersions(pkg.id)
+  } catch (error) {
+    versionError.value = errorMessage(error)
+  } finally {
+    versionBusy.value = false
+  }
+}
+
+async function switchVersion(): Promise<void> {
+  const pkg = versionPackage.value
+  const version = nextVersion.value
+  if (!pkg || !version || version === pkg.version) return
+  versionBusy.value = true
+  versionError.value = ''
+  try {
+    await project.activatePackageVersion(pkg.id, version)
+    toast.success(`${pkg.name} 已切换到 v${version}`)
+    versionPackage.value = null
+  } catch (error) {
+    versionError.value = errorMessage(error)
+  } finally {
+    versionBusy.value = false
+  }
+}
 
 /** 包编辑器安装完成：选中新包；「安装并添加设备」直接去设备页。 */
 function onStudioInstalled(packageId: string, addDevice: boolean): void {
+  packageFilter.value = ''
   selectedId.value = packageId
   if (addDevice) {
     void router.push({ path: '/devices', query: { add: '1', package: packageId } })
   }
 }
 
-const selected = computed<PackageDto | null>(() => {
-  if (!project.packages.length) return null
-  return project.packages.find((p) => p.id === selectedId.value) ?? project.packages[0]
+const filteredPackages = computed(() => {
+  const query = packageFilter.value.trim().toLowerCase()
+  return project.packages.filter((pkg) =>
+    [pkg.name, pkg.id, pkg.vendor, pkg.protocol.driver].some((value) => value?.toLowerCase().includes(query)),
+  )
 })
+const selected = computed<PackageDto | null>(() =>
+  filteredPackages.value.find((pkg) => pkg.id === selectedId.value) ?? filteredPackages.value[0] ?? null,
+)
 
 const selectedPoints = computed(() => selected.value?.points ?? [])
 const bitCount = computed(() =>
@@ -107,6 +153,10 @@ function openImport(): void {
   importOpen.value = true
 }
 
+watch(deviceSetup, (setup) => {
+  if (setup) openImport()
+}, { immediate: true })
+
 async function doImport(): Promise<void> {
   const path = importPath.value.trim()
   if (!path) {
@@ -122,10 +172,14 @@ async function doImport(): Promise<void> {
       project.packages.find((p) => !before.has(p.id)) ??
       project.packages.find((p) => before.get(p.id) !== p.version) ??
       project.packages.find((p) => p.id === selectedId.value)
-    if (changed) selectedId.value = changed.id
+    if (changed) {
+      packageFilter.value = ''
+      selectedId.value = changed.id
+    }
     toast.success(changed ? `设备包 ${changed.name} v${changed.version} 已安装` : '设备包已导入')
     importOpen.value = false
     importPath.value = ''
+    if (deviceSetup.value) void router.push('/devices')
   } catch (e) {
     importError.value = errorMessage(e)
   } finally {
@@ -195,7 +249,8 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="page">
-    <PageHeader title="设备包" subtitle="声明式设备型号：manifest + 点表；导入即注册，实例共用一份点表">
+    <PageHeader title="设备包" subtitle="管理设备型号、通信协议和点位定义">
+      <n-button v-if="deviceSetup" size="small" @click="router.push('/devices')">返回设备接入</n-button>
       <n-button size="small" type="primary" @click="studioOpen = true">
         <template #icon><AppIcon name="plus" :size="15" /></template>
         新建设备包
@@ -230,8 +285,11 @@ onBeforeUnmount(() => {
           <span>已安装</span>
           <span class="mono">{{ project.packages.length }}</span>
         </div>
+        <n-input v-model:value="packageFilter" clearable placeholder="搜索设备包" aria-label="搜索设备包">
+          <template #prefix><AppIcon name="search" :size="15" /></template>
+        </n-input>
         <button
-          v-for="p in project.packages"
+          v-for="p in filteredPackages"
           :key="p.id"
           type="button"
           class="pkg-item"
@@ -266,6 +324,7 @@ onBeforeUnmount(() => {
           <div class="pkg-version">
             <span class="mono">v{{ selected.version }}</span>
             <span class="state-pill idle">{{ selected.protocol.driver }}</span>
+            <n-button size="tiny" quaternary :disabled="!conn.connected" @click="openVersions(selected)">版本管理</n-button>
             <n-button size="tiny" quaternary type="error" @click="removing = true">
               <template #icon><AppIcon name="trash" :size="14" /></template>
               删除
@@ -284,7 +343,7 @@ onBeforeUnmount(() => {
           <div class="pkg-stat">
             <span class="label">可写点</span>
             <strong class="mono">{{ rwCount }}</strong>
-            <span class="muted small">access = rw</span>
+            <span class="muted small">支持读写</span>
           </div>
           <div class="pkg-stat">
             <span class="label">在用设备</span>
@@ -294,13 +353,12 @@ onBeforeUnmount(() => {
           <div class="pkg-stat">
             <span class="label">厂商</span>
             <strong>{{ selected.vendor || '—' }}</strong>
-            <span class="muted small">vendor</span>
           </div>
         </div>
 
         <div class="pkg-points-head">
           <h4>点表</h4>
-          <span class="muted small">地址为设备手册工程记法；位展开自动生成只读子 tag</span>
+          <span v-if="selected.protocol.driver === 'modbus'" class="muted small">寄存器地址采用设备手册工程记法</span>
         </div>
 
         <div class="data-table pkg-points">
@@ -335,11 +393,14 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
+      <EmptyState v-else-if="packageFilter.trim()" icon="search" title="没有匹配的设备包">
+        <n-button size="small" @click="packageFilter = ''">清除搜索</n-button>
+      </EmptyState>
       <EmptyState
         v-else-if="project.loaded"
         icon="package"
         title="选择或导入一个设备包"
-        text="设备包描述一种设备型号的寄存器点表，导入后可在设备页添加多个同型号从站。"
+        text="设备包定义一个型号的通信协议、点表和默认页面。"
       >
         <n-button size="small" type="primary" @click="openImport">导入设备包</n-button>
       </EmptyState>
@@ -400,6 +461,22 @@ onBeforeUnmount(() => {
       <template #footer>
         <n-button size="small" @click="importOpen = false">取消</n-button>
         <n-button size="small" type="primary" :loading="importing" @click="doImport">导入</n-button>
+      </template>
+    </ModalShell>
+
+    <ModalShell v-if="versionPackage" title="设备包版本" :subtitle="versionPackage.name" :width="480"
+      @close="!versionBusy && (versionPackage = null)">
+      <label class="field">
+        <span>启用版本</span>
+        <n-select v-model:value="nextVersion" :loading="versionBusy" :disabled="versionBusy"
+          :options="versions.map((version) => ({ value: version, label: `v${version}${version === versionPackage?.version ? ' · 当前' : ''}` }))" />
+      </label>
+      <p v-if="usageCount(versionPackage.id)" class="hint">切换时会重建在用通道的轮询计划，采集会短暂停顿。</p>
+      <p v-if="versionError" class="banner danger" role="alert">{{ versionError }}</p>
+      <template #footer>
+        <n-button size="small" :disabled="versionBusy" @click="versionPackage = null">关闭</n-button>
+        <n-button size="small" type="primary" :loading="versionBusy"
+          :disabled="!nextVersion || nextVersion === versionPackage.version" @click="switchVersion">应用版本</n-button>
       </template>
     </ModalShell>
 

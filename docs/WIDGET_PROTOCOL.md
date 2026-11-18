@@ -1,5 +1,9 @@
 # 组件协议 v2（Widget Protocol）
 
+工作台、插件导航页和设备页共用页面画布。工作台编辑支持新增跨设备页面，数据槽位直接选择某台设备的点或位。设备布局优先使用当前实例覆盖，再使用同型号共享布局，最后使用设备包默认值。每个作用域可单独恢复其上级布局。
+
+设备包与 UI 插件的组件声明可增加 `configSchema`。键为参数名，值声明 `type`、`label`，并可带 `description`、`default`、`min`、`max` 或 `choices`。类型支持 `string`、`number`、`integer`、`boolean` 和 `select`。编辑器按声明生成表单，宿主会合并默认值与每个组件实例的配置。
+
 > 状态：P1–P4 已实施（2026-11-12）。目标是让「设备页面 = 小组件排列」成为宿主唯一模型。
 > 本协议允许打破现有 `components[{kind,title,config}]` 结构；旧包通过兼容层继续可用。
 >
@@ -273,19 +277,31 @@ import(entry) → 缓存模块 → new ShadowRoot → mount(host)
 - **P4 已实现**：`schemaVersion: 2` 页面读取时翻译为内存 `components[]`（保留实例 `id`）；
   安装/保存与 v1 共用同一套 rect/绑定校验。包导出仍保留作者写的 v2 `widgets[]` 形态。
 
+内置的 `core:trend`（实时趋势）与 `core:level`（量程条）均使用 `bind.value` 绑定单个数值点，支持 `config.unit` 和 `config.decimals`。趋势显示当前页面收到的最近 60 次有效更新。量程条使用 `config.min` 和 `config.max` 指定上下限，默认先取点表定义，再使用 0 和 100。两种组件均使用带 `core:` 前缀的名称。
+
+设备页编辑器和设备包编辑器共用组件目录和 12 列拖拽画布。新增内置组件使用以下声明。
+
+| 组件 | 绑定 | 配置与行为 |
+|---|---|---|
+| `core:readings` 多点读数 | `bind.values` | 接受点或位的数组，按绑定顺序显示读数、单位和质量 |
+| `core:indicator` 状态指示灯 | `bind.value` | 显示布尔值、状态位或数值的非零状态，可设置 `onLabel` 和 `offLabel` |
+| `core:threshold` 区间监视 | `bind.value` | 使用 `min`、`max`、`unit` 和 `decimals`，在页面内显示超出区间的读数 |
+| `core:stats` 读数统计 | `bind.value` | 计算最近 60 次有效更新的最小值、均值和最大值，支持 `unit` 和 `decimals` |
+| `core:text` 说明与分区 | 无 | 在 `config.text` 填写纯文本，可用 `config.tone: "accent"` 强调 |
+
 ### 5.2 页面归属
 
-- **页面属于设备类型**（设备包），实例共用；绑定在渲染时解析为当前选中实例。
-- 用户覆盖仍走 `workspaces.json`（同 id 覆盖页面、可增删排序），新增：可编辑 `widgets`。
-- 每台设备**实例级**的自定义大屏继续由仪表盘组件承担（它是 `core:dashboard` 组件，内部有自己的 per-instance 布局文档），两者不冲突。
+- 设备包声明同型号设备的默认页面。相对绑定在渲染时解析为当前设备实例。
+- `workspaces.json` 按工作台、插件页面、设备型号或实例保存自定义页面。可增删、排序和编辑小组件。
+- `core:dashboard` 仍可放入页面，读取现有仪表盘文档。
 
 ### 5.3 页面来源优先级
 
 ```
-用户覆盖（workspaces.json） > 设备包 ui.pages > 宿主内置默认页
+设备实例覆盖 > 设备型号覆盖 > 设备包 ui.pages > 宿主内置默认页
 ```
 
-与现状一致，只是 `pages` 的内部结构换成 widgets。
+工作台与插件页面分别读取自己的布局覆盖，缺省时显示各自的默认页面。
 
 ## 6. 三种提供方
 

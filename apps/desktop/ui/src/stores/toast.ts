@@ -7,6 +7,8 @@ export interface ToastItem {
   id: number
   kind: ToastKind
   text: string
+  /** 自动关闭时长（ms），供进度条动画使用 */
+  ttl: number
 }
 
 /** 轻量提示条：避免为几个提示引入全局 dialog provider。 */
@@ -20,7 +22,7 @@ export const useToastStore = defineStore('toast', () => {
 
   function push(kind: ToastKind, text: string, ttl = 4200): number {
     const id = ++seq
-    items.value.push({ id, kind, text })
+    items.value.push({ id, kind, text, ttl })
     window.setTimeout(() => dismiss(id), ttl)
     return id
   }

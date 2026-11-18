@@ -1,0 +1,199 @@
+/* ==========================================================================
+   planM · 仪表盘（遗留兼容层）
+   DashboardPage 已从导航撤出（router 重定向），仅为不让死代码裸奔保留；
+   从旧 pages.css 机械 token 化而来，不再新增功能。确认弃用后可整体删除。
+   ========================================================================== */
+
+/* —— 仪表盘 —— */
+
+.dash-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  flex-wrap: wrap;
+}
+
+.dash-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.dash-glyph {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-2);
+  color: var(--accent);
+}
+
+.dash-title strong {
+  font-size: 14px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.save-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-3);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.save-state.error {
+  color: var(--bad);
+}
+
+.save-spinner {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.dash-canvas {
+  display: grid;
+  min-height: 220px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+
+.dash-canvas.editing {
+  border-color: var(--line);
+  background: rgb(var(--rgb-wash) / 0.012);
+}
+
+.dash-widget {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgb(var(--rgb-wash) / 0.03), rgb(var(--rgb-wash) / 0.006) 46%, transparent),
+    var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: inset 0 1px 0 rgb(var(--rgb-wash) / 0.03);
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.dash-widget.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgb(var(--rgb-accent) / 0.28);
+}
+
+.dw-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px 0;
+  min-width: 0;
+}
+
+.dw-grip {
+  display: flex;
+  flex: none;
+  color: var(--text-3);
+  cursor: grab;
+  touch-action: none;
+}
+
+.dw-grip:active {
+  cursor: grabbing;
+}
+
+.dw-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dw-tag {
+  margin-left: auto;
+  max-width: 45%;
+  color: var(--text-3);
+  font-size: 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dw-tools {
+  display: flex;
+  gap: 1px;
+  flex: none;
+}
+
+.icon-btn.tiny {
+  width: 22px;
+  height: 22px;
+}
+
+.dw-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 2px 12px 10px;
+}
+
+.dw-resize {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  touch-action: none;
+  border-bottom-right-radius: 8px;
+  background: repeating-linear-gradient(135deg, transparent 0 3px, var(--line) 3px 4px);
+  opacity: 0.85;
+}
+
+.dash-empty {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 46px 20px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  text-align: center;
+}
+
+.dash-empty h3 {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.dash-empty p {
+  font-size: 12px;
+  max-width: 46ch;
+}
+

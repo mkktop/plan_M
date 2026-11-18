@@ -51,5 +51,14 @@ export const useDeviceTabsStore = defineStore('deviceTabs', () => {
     }
   }
 
-  return { openIds, open, close, prune }
+  /** 拖拽排序：把 from 位置的标签移动到 to 位置。 */
+  function reorder(from: number, to: number): void {
+    const n = openIds.value.length
+    if (from === to || from < 0 || to < 0 || from >= n || to >= n) return
+    const [id] = openIds.value.splice(from, 1)
+    openIds.value.splice(to, 0, id)
+    persist()
+  }
+
+  return { openIds, open, close, prune, reorder }
 })

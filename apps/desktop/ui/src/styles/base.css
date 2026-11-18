@@ -1,0 +1,357 @@
+/* ==========================================================================
+   planM · 基础层：reset / 排版 / 滚动条 / 焦点 / 工具类 / 公共动画
+   所有颜色引用 tokens.css 的变量，禁止硬编码。
+   ========================================================================== */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--text-1);
+  background: var(--scene-bg) fixed;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+h4,
+p,
+dl,
+dd {
+  margin: 0;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+code,
+pre {
+  font-family: var(--font-mono);
+}
+
+::selection {
+  background: rgb(var(--rgb-accent) / 0.3);
+}
+
+*:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 8px;
+  border: 2px solid var(--bg-0);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+/* —— 公共动画 —— */
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 4px rgb(var(--rgb-good) / 0.12), 0 0 14px rgb(var(--rgb-good) / 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgb(var(--rgb-good) / 0.16), 0 0 22px rgb(var(--rgb-good) / 0.6);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 卡片入场：配合 rise-in 用 style 内联 animation-delay 做 stagger */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 数值刷新闪动：JS 在值变化时给元素加 .flash 类，600ms 后移除 */
+@keyframes value-flash {
+  0% {
+    text-shadow: 0 0 12px rgb(var(--rgb-accent) / 0.55);
+    color: var(--accent-strong);
+  }
+  100% {
+    text-shadow: none;
+  }
+}
+
+@keyframes shimmer {
+  from {
+    background-position: -200% 0;
+  }
+  to {
+    background-position: 200% 0;
+  }
+}
+
+/* —— 骨架屏 —— */
+
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  min-height: 14px;
+  border-radius: var(--radius-xs);
+  background: rgb(var(--rgb-wash) / 0.06);
+}
+
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgb(var(--rgb-wash) / 0.07),
+    transparent
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+
+/* —— 工具类 —— */
+
+.muted {
+  color: var(--text-3);
+}
+
+.small {
+  font-size: 11px;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+}
+
+.gap-4 {
+  gap: 4px;
+}
+
+.gap-8 {
+  gap: 8px;
+}
+
+.gap-12 {
+  gap: 12px;
+}
+
+.align-center {
+  align-items: center;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.mt-8 {
+  margin-top: 8px;
+}
+
+.mt-12 {
+  margin-top: 12px;
+}
+
+.mt-14 {
+  margin-top: 14px;
+}
+
+.mb-0 {
+  margin-bottom: 0 !important;
+}
+
+.mb-12 {
+  margin-bottom: 12px;
+}
+
+.m-12 {
+  margin: 12px;
+}
+
+.pad-12 {
+  padding: 12px;
+}
+
+.text-good {
+  color: var(--good);
+}
+
+.text-bad {
+  color: var(--bad);
+}
+
+.text-warn {
+  color: var(--warn);
+}
+
+.text-muted {
+  color: var(--text-3);
+}
+
+.ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 控件宽度档位：替代模板里的内联 style="width: NNNpx" */
+.w-full {
+  width: 100%;
+}
+
+.w-64 {
+  width: 64px;
+}
+
+.w-72 {
+  width: 72px;
+}
+
+.w-90 {
+  width: 90px;
+}
+
+.w-100 {
+  width: 100px;
+}
+
+.w-110 {
+  width: 110px;
+}
+
+.w-120 {
+  width: 120px;
+}
+
+.w-130 {
+  width: 130px;
+}
+
+.w-140 {
+  width: 140px;
+}
+
+.w-150 {
+  width: 150px;
+}
+
+.w-160 {
+  width: 160px;
+}
+
+.w-170 {
+  width: 170px;
+}
+
+.w-180 {
+  width: 180px;
+}
+
+.w-200 {
+  width: 200px;
+}
+
+.w-220 {
+  width: 220px;
+}
+
+.w-260 {
+  width: 260px;
+}
+
+.w-320 {
+  width: 320px;
+}
+
+.ml-8 {
+  margin-left: 8px;
+}
+
+/* —— 减少动态效果：跟随系统偏好，关闭非必要动画 —— */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.w-240 {
+  width: 240px;
+}

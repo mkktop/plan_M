@@ -122,8 +122,7 @@ function fromChannel(ch: ChannelDto): ChannelForm {
   return f
 }
 
-function newChannelForm(preferredPort?: string): ChannelForm {
-  const transport = defaultTransport()
+function newChannelForm(preferredPort?: string, transport = defaultTransport()): ChannelForm {
   const f = { ...blank(), transport }
   if (transport === 'serial') {
     f.port = defaultPort(preferredPort)
@@ -184,8 +183,13 @@ onMounted(() => {
 
 watch(
   () => form.transport,
-  (kind) => {
+  (kind, previous) => {
     if (kind === 'serial') void project.loadTransportTargets('serial')
+    if (editing) return
+    const oldDefaults = newChannelForm(form.port, previous)
+    const defaults = newChannelForm(form.port, kind)
+    if (form.id === oldDefaults.id) form.id = defaults.id
+    if (form.name === oldDefaults.name) form.name = defaults.name
   },
 )
 
@@ -297,15 +301,15 @@ async function save(): Promise<void> {
       </div>
       <div class="field">
         <label>应答超时（ms）</label>
-        <n-input-number v-model:value="form.respTimeoutMs" :min="20" :max="10000" style="width: 100%" />
+        <n-input-number v-model:value="form.respTimeoutMs" :min="20" :max="10000" class="w-full" />
       </div>
       <div class="field">
         <label>重试次数</label>
-        <n-input-number v-model:value="form.retries" :min="0" :max="10" style="width: 100%" />
+        <n-input-number v-model:value="form.retries" :min="0" :max="10" class="w-full" />
       </div>
       <div class="field">
         <label>离线探测周期（ms）</label>
-        <n-input-number v-model:value="form.probeIntervalMs" :min="100" :max="600000" style="width: 100%" />
+        <n-input-number v-model:value="form.probeIntervalMs" :min="100" :max="600000" class="w-full" />
       </div>
 
       <template v-if="form.transport === 'serial'">
@@ -331,7 +335,7 @@ async function save(): Promise<void> {
         </div>
         <div class="field">
           <label>帧间静默（ms）</label>
-          <n-input-number v-model:value="form.interFrameGapMs" :min="0" :max="1000" style="width: 100%" />
+          <n-input-number v-model:value="form.interFrameGapMs" :min="0" :max="1000" class="w-full" />
         </div>
         <div class="field span-2">
           <label>硬件 ID（可选）</label>
@@ -347,11 +351,11 @@ async function save(): Promise<void> {
         </div>
         <div class="field">
           <label>端口</label>
-          <n-input-number v-model:value="form.tcpPort" :min="1" :max="65535" style="width: 100%" />
+          <n-input-number v-model:value="form.tcpPort" :min="1" :max="65535" class="w-full" />
         </div>
         <div class="field">
           <label>连接超时（ms）</label>
-          <n-input-number v-model:value="form.connectTimeoutMs" :min="100" :max="60000" style="width: 100%" />
+          <n-input-number v-model:value="form.connectTimeoutMs" :min="100" :max="60000" class="w-full" />
         </div>
       </template>
 

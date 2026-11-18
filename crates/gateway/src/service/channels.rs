@@ -4,15 +4,18 @@ use super::GatewayService;
 use crate::supervisor::{spawn_channel, ChannelRuntime, DeviceRuntime};
 use hmi_domain::config::{ChannelConfig, DeviceAddress, DeviceConfig};
 use hmi_domain::driver::CompileInput;
+use hmi_domain::link::TransportKind;
 use hmi_domain::points::PointDef;
 use hmi_domain::protocol::{ProtocolDecl, ScanRange};
 use hmi_domain::value::Value;
+use hmi_packaging::InstalledPackage;
 use std::sync::Arc;
 
 impl GatewayService {
     // —— 配置变更 ——
 
     pub async fn upsert_channel(self: &Arc<Self>, cfg: ChannelConfig) -> anyhow::Result<()> {
+        let _activation = self.activation.write().await;
         let id = cfg.id.clone();
         if id.trim().is_empty() {
             anyhow::bail!("通道 id 不能为空");
@@ -56,28 +59,34 @@ impl GatewayService {
             }
         }
 
-        self.stop_channel(&id).await;
         {
-            let mut c = self.config.write().await;
-            c.channels.retain(|x| x.id != id);
-            c.channels.push(cfg);
-            self.store.save(&c)?;
+            let mut current = self.config.write().await;
+            let mut updated = current.clone();
+            updated.channels.retain(|x| x.id != id);
+            updated.channels.push(cfg);
+            self.store.save(&updated)?;
+            *current = updated;
         }
         self.restart_channel(&id).await;
         Ok(())
     }
 
     pub async fn remove_channel(self: &Arc<Self>, id: &str) -> anyhow::Result<()> {
+        let _activation = self.activation.write().await;
+        {
+            let mut current = self.config.write().await;
+            let mut updated = current.clone();
+            updated.channels.retain(|x| x.id != id);
+            updated.devices.retain(|d| d.channel_id != id);
+            self.store.save(&updated)?;
+            *current = updated;
+        }
         self.stop_channel(id).await;
-        let mut c = self.config.write().await;
-        c.channels.retain(|x| x.id != id);
-        // 挂在该通道下的设备一并移除
-        c.devices.retain(|d| d.channel_id != id);
-        self.store.save(&c)?;
         Ok(())
     }
 
     pub async fn add_device(self: &Arc<Self>, cfg: DeviceConfig) -> anyhow::Result<()> {
+        let _activation = self.activation.write().await;
         let channel = {
             let c = self.config.read().await;
             match c.channel(&cfg.channel_id) {
@@ -92,51 +101,35 @@ impl GatewayService {
                 None => anyhow::bail!("设备包 `{}` 未安装", cfg.package),
             }
         };
-        let driver = self
-            .drivers
-            .get(&pkg.manifest.protocol.driver)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("驱动 `{}` 未注册", pkg.manifest.protocol.driver))?;
-
-        if !driver.transports().contains(&channel.transport_kind()) {
-            anyhow::bail!(
-                "驱动 `{}` 不支持通道传输 `{}`",
-                driver.id(),
-                channel.transport_kind()
-            );
-        }
-        if !pkg
-            .manifest
-            .protocol
-            .allows_transport(channel.transport_kind(), driver.transports())
-        {
-            anyhow::bail!(
-                "设备包 `{}` 不支持通道传输 `{}`",
-                cfg.package,
-                channel.transport_kind()
-            );
-        }
-        if let Err(e) = driver.validate_address(&cfg.address) {
-            anyhow::bail!("设备地址不合法：{e}");
-        }
+        self.prepare_device(&cfg, channel.transport_kind(), &pkg)?;
 
         let ch = cfg.channel_id.clone();
-        {
-            let mut c = self.config.write().await;
-            c.devices.retain(|x| x.id != cfg.id);
-            c.devices.push(cfg);
-            self.store.save(&c)?;
+        let previous = {
+            let mut current = self.config.write().await;
+            let previous = current.device(&cfg.id).map(|d| d.channel_id.clone());
+            let mut updated = current.clone();
+            updated.devices.retain(|x| x.id != cfg.id);
+            updated.devices.push(cfg);
+            self.store.save(&updated)?;
+            *current = updated;
+            previous
+        };
+        if let Some(old) = previous.filter(|old| *old != ch) {
+            self.restart_channel(&old).await;
         }
         self.restart_channel(&ch).await;
         Ok(())
     }
 
     pub async fn remove_device(self: &Arc<Self>, id: &str) -> anyhow::Result<()> {
+        let _activation = self.activation.write().await;
         let ch = {
-            let mut c = self.config.write().await;
-            let ch = c.device(id).map(|d| d.channel_id.clone());
-            c.devices.retain(|x| x.id != id);
-            self.store.save(&c)?;
+            let mut current = self.config.write().await;
+            let ch = current.device(id).map(|d| d.channel_id.clone());
+            let mut updated = current.clone();
+            updated.devices.retain(|x| x.id != id);
+            self.store.save(&updated)?;
+            *current = updated;
             ch
         };
         self.device_errors.write().await.remove(id);
@@ -152,6 +145,7 @@ impl GatewayService {
         let handle = self.channels.write().await.remove(id);
         if let Some(h) = handle {
             h.stop().await;
+            self.hub.write(self.hub.comm_lost_batch(&h.tags()));
         }
     }
 
@@ -191,68 +185,16 @@ impl GatewayService {
                 record_device_error(self, &d.id, format!("设备包 `{}` 未安装", d.package)).await;
                 continue;
             };
-            let Some(driver) = self.drivers.get(&pkg.manifest.protocol.driver).cloned() else {
-                record_device_error(
-                    self,
-                    &d.id,
-                    format!("驱动 `{}` 未注册", pkg.manifest.protocol.driver),
-                )
-                .await;
-                continue;
-            };
-            if !driver.transports().contains(&cfg.transport_kind()) {
-                record_device_error(
-                    self,
-                    &d.id,
-                    format!(
-                        "驱动 `{}` 不支持传输 `{}`",
-                        driver.id(),
-                        cfg.transport_kind()
-                    ),
-                )
-                .await;
-                continue;
-            }
-            if !pkg
-                .manifest
-                .protocol
-                .allows_transport(cfg.transport_kind(), driver.transports())
-            {
-                record_device_error(
-                    self,
-                    &d.id,
-                    format!(
-                        "设备包 `{}` 不支持传输 `{}`",
-                        d.package,
-                        cfg.transport_kind()
-                    ),
-                )
-                .await;
-                continue;
-            }
-            let input = CompileInput {
-                device_id: &d.id,
-                overrides: &d.overrides,
-                points: &pkg.points,
-                protocol: &pkg.manifest.protocol,
-            };
-            match driver.compile(&input) {
-                Ok(plan) => {
-                    for w in &plan.warnings {
-                        tracing::warn!(device = %d.id, warning = %w, "编译警告");
+            match self.prepare_device(d, cfg.transport_kind(), pkg) {
+                Ok(runtime) => {
+                    for warning in &runtime.plan.warnings {
+                        tracing::warn!(device = %d.id, warning = %warning, "编译警告");
                     }
-                    devices.push(DeviceRuntime {
-                        device_id: d.id.clone(),
-                        address: d.address.clone(),
-                        driver: driver.clone(),
-                        protocol: pkg.manifest.protocol.clone(),
-                        all_tags: plan.all_tags(),
-                        plan,
-                    });
+                    devices.push(Arc::new(runtime));
                 }
                 Err(e) => {
-                    tracing::error!(device = %d.id, error = %e, "轮询计划编译失败，跳过该设备");
-                    record_device_error(self, &d.id, format!("轮询计划编译失败：{e}")).await;
+                    tracing::error!(device = %d.id, error = %e, "设备配置无效");
+                    record_device_error(self, &d.id, e.to_string()).await;
                 }
             }
         }
@@ -268,6 +210,43 @@ impl GatewayService {
         self.channels.write().await.insert(id.to_string(), handle);
     }
 
+    pub(crate) fn prepare_device(
+        &self,
+        device: &DeviceConfig,
+        transport: TransportKind,
+        package: &InstalledPackage,
+    ) -> anyhow::Result<DeviceRuntime> {
+        let protocol = &package.manifest.protocol;
+        let driver = self
+            .drivers
+            .get(&protocol.driver)
+            .ok_or_else(|| anyhow::anyhow!("驱动 `{}` 未注册", protocol.driver))?;
+        if !protocol.allows_transport(transport, driver.transports()) {
+            anyhow::bail!("设备包 `{}` 不支持传输 `{}`", device.package, transport);
+        }
+        driver
+            .validate_address(&device.address)
+            .map_err(|e| anyhow::anyhow!("设备地址不合法：{e}"))?;
+        let (points, warnings) = driver.effective_points(&package.points, &device.overrides);
+        let mut plan = driver
+            .compile(&CompileInput {
+                device_id: &device.id,
+                points: &points,
+                protocol,
+            })
+            .map_err(|e| anyhow::anyhow!("轮询计划编译失败：{e}"))?;
+        plan.warnings.extend(warnings);
+        Ok(DeviceRuntime {
+            device_id: device.id.clone(),
+            address: device.address.clone(),
+            driver: driver.clone(),
+            protocol: protocol.clone(),
+            all_tags: plan.all_tags(),
+            plan,
+            points,
+        })
+    }
+
     // —— 写点 ——
 
     /// 写 tag：`<设备id>.<点id>`（位子 tag 只读）。
@@ -280,46 +259,41 @@ impl GatewayService {
             return Err("状态位子 tag 为只读（写请写父点）".into());
         }
 
-        let (device, point, driver, protocol) = {
-            let cfg = self.config.read().await;
-            let Some(device) = cfg.device(dev_id) else {
-                return Err(format!("设备 `{dev_id}` 不存在"));
-            };
-            let packages = self.packages.read().await;
-            let Some(pkg) = packages.get(&device.package) else {
-                return Err(format!("设备包 `{}` 未安装", device.package));
-            };
-            let Some(point) = pkg.points.point(point_id) else {
-                return Err(format!(
-                    "点 `{point_id}` 不在包 {} 的点表中",
-                    device.package
-                ));
-            };
-            let Some(driver) = self.drivers.get(&pkg.manifest.protocol.driver) else {
-                return Err("驱动未注册".into());
-            };
-            (
-                device.clone(),
-                point.clone(),
-                driver.clone(),
-                pkg.manifest.protocol.clone(),
-            )
-        };
+        let _activation = self.activation.read().await;
+        let channel_id = self
+            .config
+            .read()
+            .await
+            .device(dev_id)
+            .map(|device| device.channel_id.clone())
+            .ok_or_else(|| format!("设备 `{dev_id}` 不存在"))?;
+        let handle = self
+            .channels
+            .read()
+            .await
+            .get(&channel_id)
+            .cloned()
+            .ok_or_else(|| "通道未运行".to_string())?;
+        let device = handle
+            .device(dev_id)
+            .ok_or_else(|| format!("设备 `{dev_id}` 没有有效的轮询计划"))?;
+        let point = device
+            .points
+            .point(point_id)
+            .ok_or_else(|| format!("点 `{point_id}` 不在设备的生效点表中"))?;
         if point.access != hmi_domain::points::Access::Rw {
             return Err(format!("点 `{point_id}` 为只读"));
         }
-        validate_write_value(&point, &value)?;
-
-        let handle = {
-            let channels = self.channels.read().await;
-            let Some(h) = channels.get(&device.channel_id) else {
-                return Err("通道未运行".into());
-            };
-            h.clone()
-        };
+        validate_write_value(point, &value)?;
 
         handle
-            .write(driver, device.address.clone(), point, value, protocol)
+            .write(
+                device.driver.clone(),
+                device.address.clone(),
+                point.clone(),
+                value,
+                device.protocol.clone(),
+            )
             .await
     }
 
@@ -329,97 +303,115 @@ impl GatewayService {
     ///
     /// `driver_id` 为空时：优先用通道上已有设备的唯一驱动；否则用唯一支持该
     /// 传输的驱动；仍不唯一则放弃（由 UI 明确选择）。
-    pub async fn scan_channel<F>(
+    pub async fn scan_channel(
         &self,
         channel_id: &str,
         driver_id: Option<&str>,
+        package_id: Option<&str>,
         range: ScanRange,
-        mut progress: F,
-    ) -> Vec<DeviceAddress>
-    where
-        F: FnMut(DeviceAddress, bool) + Send,
-    {
-        let (channel, devices) = {
-            let cfg = self.config.read().await;
-            let Some(ch) = cfg.channel(channel_id) else {
-                return Vec::new();
-            };
-            (
-                ch.clone(),
-                cfg.devices_on(channel_id)
-                    .into_iter()
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            )
-        };
-        let packages = self.packages.read().await.clone();
-
-        let driver = match driver_id {
-            Some(id) => self.drivers.get(id).cloned(),
-            None => {
-                let mut ids: Vec<String> = devices
-                    .iter()
-                    .filter_map(|d| packages.get(&d.package))
-                    .map(|p| p.manifest.protocol.driver.clone())
+    ) -> Result<Vec<DeviceAddress>, String> {
+        let (driver, protocol, handle) = {
+            let _activation = self.activation.read().await;
+            let config = self.config.read().await;
+            let channel = config.channel(channel_id).ok_or("通道不存在")?;
+            let packages = self.packages.read().await;
+            let kind = channel.transport_kind();
+            let declared = package_id
+                .map(|id| packages.get(id).ok_or("扫描所选设备包未安装"))
+                .transpose()?;
+            let existing = config
+                .devices_on(channel_id)
+                .into_iter()
+                .filter_map(|device| packages.get(&device.package));
+            let available = self
+                .driver_list
+                .iter()
+                .filter(|driver| driver.transports().contains(&kind));
+            let selected =
+                driver_id.or_else(|| declared.map(|pkg| pkg.manifest.protocol.driver.as_str()));
+            let driver = if let Some(id) = selected {
+                self.drivers
+                    .get(id)
+                    .filter(|driver| driver.transports().contains(&kind))
+                    .ok_or("该驱动未注册或与通道不兼容")?
+            } else {
+                let installed: std::collections::BTreeSet<_> = existing
+                    .clone()
+                    .map(|pkg| pkg.manifest.protocol.driver.as_str())
                     .collect();
-                ids.sort();
-                ids.dedup();
-                if ids.len() == 1 {
-                    self.drivers.get(&ids[0]).cloned()
+                if installed.len() == 1 {
+                    self.drivers
+                        .get(*installed.first().unwrap())
+                        .ok_or("该驱动未注册")?
                 } else {
-                    let candidates: Vec<Arc<dyn hmi_domain::driver::Driver>> = self
-                        .driver_list
-                        .iter()
-                        .filter(|d| d.transports().contains(&channel.transport_kind()))
-                        .cloned()
-                        .collect();
-                    if candidates.len() == 1 {
-                        Some(candidates[0].clone())
-                    } else {
-                        None
+                    let mut choices = available.filter(|driver| !driver.scan_requires_package());
+                    let only = choices.next().ok_or("请选择驱动和扫描所需的设备包")?;
+                    if choices.next().is_some() {
+                        return Err("请选择扫描驱动".into());
                     }
+                    only
                 }
-            }
-        };
-        let Some(driver) = driver else {
-            return Vec::new();
-        };
-        if !driver.transports().contains(&channel.transport_kind()) {
-            return Vec::new();
-        }
-
-        // 扫描时优先用同通道已有设备的包参数（framing 等）
-        let protocol = devices
-            .iter()
-            .filter_map(|d| packages.get(&d.package))
-            .find(|p| p.manifest.protocol.driver == driver.id())
-            .map(|p| p.manifest.protocol.clone())
-            .unwrap_or_else(|| ProtocolDecl {
-                driver: driver.id().to_string(),
-                transports: Vec::new(),
-                params: serde_json::json!({}),
-            });
-
-        let handle = {
-            let channels = self.channels.read().await;
-            let Some(h) = channels.get(channel_id) else {
-                return Vec::new();
             };
-            h.clone()
+            let package = declared.or_else(|| {
+                existing
+                    .clone()
+                    .find(|pkg| pkg.manifest.protocol.driver == driver.id())
+            });
+            let protocol = match package {
+                Some(pkg)
+                    if pkg.manifest.protocol.driver == driver.id()
+                        && pkg
+                            .manifest
+                            .protocol
+                            .allows_transport(kind, driver.transports()) =>
+                {
+                    pkg.manifest.protocol.clone()
+                }
+                Some(_) => return Err("设备包和当前通道或驱动不兼容".into()),
+                None if driver.scan_requires_package() => {
+                    return Err("该驱动需要设备包提供探测帧".into())
+                }
+                None => ProtocolDecl {
+                    driver: driver.id().into(),
+                    transports: Vec::new(),
+                    params: serde_json::json!({}),
+                },
+            };
+            let bounds = driver.scan_bounds().ok_or("驱动不支持地址扫描")?;
+            if range.from < bounds.from
+                || range.to > bounds.to
+                || range.from > range.to
+                || range.to - range.from >= 256
+            {
+                return Err(format!(
+                    "扫描地址须在 {}–{} 之间，一次最多 256 个地址",
+                    bounds.from, bounds.to
+                ));
+            }
+            let handle = self
+                .channels
+                .read()
+                .await
+                .get(channel_id)
+                .cloned()
+                .ok_or("通道未运行")?;
+            (driver.clone(), protocol, handle)
         };
 
         let mut found = Vec::new();
-        for n in range.from..=range.to {
-            let addr = DeviceAddress::Number(n);
-            let ok = handle
-                .probe(driver.clone(), addr.clone(), protocol.clone())
-                .await;
-            progress(addr.clone(), ok);
-            if ok {
-                found.push(addr);
+        for number in range.from..=range.to {
+            let address = DeviceAddress::Number(number);
+            if handle.tx.is_closed() {
+                return Err("扫描期间通道已重启，请重新扫描".into());
+            }
+            if handle
+                .probe(driver.clone(), address.clone(), protocol.clone())
+                .await
+            {
+                found.push(address);
             }
         }
-        found
+        Ok(found)
     }
 }
 

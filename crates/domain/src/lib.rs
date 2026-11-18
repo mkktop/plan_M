@@ -38,3 +38,4 @@ pub use points::{
 };
 pub use protocol::{DriverIssues, ProtocolDecl, ScanRange};
 pub use value::{now_ms, Quality, TagChange, TagId, TagSnapshot, Value};
+pub mod widget_config;

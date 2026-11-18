@@ -72,7 +72,8 @@ function addDevice(): void {
             class="picker-item"
             @click="pick(d.id)"
           >
-            <span class="online-dot" :class="{ on: d.online }" />
+            <span class="online-dot" :class="{ on: project.live && d.online }"
+              :title="project.live ? (d.online ? '在线' : '离线') : '状态待确认'" />
             <span class="picker-item-main">
               <strong>{{ d.name || d.id }}</strong>
               <small class="mono muted">{{ d.id }} · {{ addressLabel(d.address) }}</small>

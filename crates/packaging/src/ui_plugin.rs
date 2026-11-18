@@ -87,6 +87,8 @@ pub struct WidgetContribution {
     pub default_w: u32,
     #[serde(default = "default_widget_h")]
     pub default_h: u32,
+    #[serde(default)]
+    pub config_schema: hmi_domain::widget_config::WidgetConfigSchema,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -223,6 +225,11 @@ pub fn validate_ui_plugin(m: &UiPluginManifest, dir: Option<&Path>) -> Vec<Strin
 
     let mut widget_ids = HashSet::new();
     for w in &m.widgets {
+        errors.extend(crate::validate::widget_config_issues(
+            &w.id,
+            &w.config_schema,
+            &serde_json::Value::Null,
+        ));
         if !valid_local_id(&w.id) {
             errors.push(format!(
                 "widget id `{}` 非法（字母/数字/连字符/下划线，≤64）",
@@ -349,7 +356,7 @@ impl UiPluginRegistry {
     }
 }
 
-fn valid_plugin_id(s: &str) -> bool {
+pub fn valid_plugin_id(s: &str) -> bool {
     let mut chars = s.chars();
     let Some(first) = chars.next() else {
         return false;

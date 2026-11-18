@@ -502,13 +502,16 @@ impl Session {
             ClientMsg::ScanChannel {
                 channel,
                 driver,
+                package,
                 range,
             } => {
                 let range = range.unwrap_or(ScanRange { from: 1, to: 32 });
-                let found = svc
-                    .scan_channel(&channel, driver.as_deref(), range, |_addr, _found| {})
-                    .await;
-                Ok(Some(ServerMsg::ScanDone { channel, found }))
+                let response = svc
+                    .scan_channel(&channel, driver.as_deref(), package.as_deref(), range)
+                    .await
+                    .map(|found| ServerMsg::ScanDone { channel, found })
+                    .unwrap_or_else(|message| ServerMsg::Error { message });
+                Ok(Some(response))
             }
             ClientMsg::GetTransportTargets { transport } => {
                 let targets = svc.transport_targets(transport).await;
@@ -517,6 +520,28 @@ impl Session {
             ClientMsg::GetPackages => {
                 let packages = dto::package_dtos(&svc.packages().await);
                 Ok(Some(ServerMsg::Packages { packages }))
+            }
+            ClientMsg::GetPackageVersions { id } => {
+                let response = match svc.package_versions(&id).await {
+                    Ok(versions) => ServerMsg::PackageVersions {
+                        id,
+                        versions: versions.iter().map(ToString::to_string).collect(),
+                    },
+                    Err(message) => ServerMsg::Error { message },
+                };
+                Ok(Some(response))
+            }
+            ClientMsg::ActivatePackageVersion { id, version } => {
+                let Ok(version) = semver::Version::parse(&version) else {
+                    return Ok(Some(ServerMsg::Error {
+                        message: "版本号应符合 semver".into(),
+                    }));
+                };
+                let response = match svc.activate_package_version(&id, &version).await {
+                    Ok(()) => ServerMsg::Snapshot(dto::snapshot_data(svc.snapshot().await)),
+                    Err(message) => ServerMsg::Error { message },
+                };
+                Ok(Some(response))
             }
             ClientMsg::UpsertChannel { config } => match svc.upsert_channel(config).await {
                 Ok(()) => Ok(Some(ServerMsg::Snapshot(dto::snapshot_data(

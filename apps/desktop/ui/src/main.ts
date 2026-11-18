@@ -1,8 +1,20 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
+// 样式先于组件加载：theme.ts 生成 Naive 覆盖时要能读到 tokens.css 的变量。
+import './styles/tokens.css'
+import './styles/base.css'
+import './styles/shell.css'
+import './styles/components.css'
+import './styles/pages/home.css'
+import './styles/pages/devices.css'
+import './styles/pages/packages.css'
+import './styles/pages/plugins.css'
+import './styles/pages/diagnostics.css'
+import './styles/pages/settings.css'
+import './styles/pages/workspace.css'
+import './styles/pages/studio.css'
+import './styles/pages/dashboard-legacy.css'
 import App from './App.vue'
 import router from './router'
-import './styles/theme.css'
-import './styles/pages.css'
 
 createApp(App).use(createPinia()).use(router).mount('#app')

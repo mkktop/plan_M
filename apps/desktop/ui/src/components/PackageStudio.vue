@@ -6,17 +6,23 @@
 //! - 校验调用 gatewayd 的 `validatePackage`（与安装同一套规则），本地只做提示；
 //! - 草稿自动存 localStorage，关闭弹窗不丢工作；安装走正式安装流。
 
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, useId, watch } from 'vue'
 import { NButton, NInput, NInputNumber, NSelect } from 'naive-ui'
 import AppIcon from '@/components/AppIcon.vue'
 import ModalShell from '@/components/ModalShell.vue'
+import FrameFields from '@/components/FrameFields.vue'
+import WidgetCatalog from '@/components/device/WidgetCatalog.vue'
+import WidgetConfigEditor from '@/components/device/WidgetConfigEditor.vue'
+import WidgetBindingsEditor from '@/components/device/WidgetBindingsEditor.vue'
+import WidgetLayoutCanvas from '@/components/device/WidgetLayoutCanvas.vue'
 import { gateway, isTauriRuntime } from '@/api/ws'
 import { useProjectStore } from '@/stores/project'
 import { errorMessage, useToastStore } from '@/stores/toast'
+import { deviceWidgetOptions, widgetDefaultSize } from '@/plugins/deviceWidgets'
+import { isCompactWidgetKind } from '@/utils/devicePages'
+import { nextWidgetRect } from '@/utils/widgetGrid'
 import {
-  CORE_WIDGET_OPTIONS,
   POINT_TYPES,
-  appendRect,
   areaOfRegister,
   buildManifest,
   buildPoints,
@@ -25,16 +31,21 @@ import {
   isBitArea,
   loadDraft,
   newPage,
+  newFrame,
+  newFramePoint,
   newPoint,
   newWidget,
   presetPages,
   saveDraft,
+  studioBindingSlot,
+  widgetBind,
   type DraftPage,
   type DraftPoint,
   type DraftWidget,
   type PackageDraft,
 } from '@/utils/packageStudio'
-import type { SnapshotMsg, WidgetRect } from '@/api/types'
+import type { BindingSpec, SnapshotMsg, WidgetRect } from '@/api/types'
+import { transportLabel } from '@/utils/transport'
 
 const emit = defineEmits<{
   (e: 'close'): void
@@ -61,6 +72,17 @@ const steps: { id: Step; label: string; hint: string }[] = [
 ]
 
 const draft = reactive<PackageDraft>(loadDraft() ?? emptyDraft())
+const driverInfo = computed(() => project.drivers.find(({ id }) => id === draft.meta.driver))
+const addressFormat = computed(() => driverInfo.value?.pointAddressFormat ||
+  (draft.meta.driver === 'frame' ? 'frame' : draft.meta.driver === 'modbus' ? 'register' : 'structured'))
+const transportOptions = computed(() => (driverInfo.value?.transports ?? []).map((kind) => ({ label: transportLabel(kind), value: kind })))
+watch(addressFormat, (format) => {
+  if (format === 'frame') {
+    draft.meta.frameProbe ??= newFrame()
+    for (const point of draft.points) point.frame ??= newFramePoint()
+  }
+}, { immediate: true })
+watch(() => draft.meta.driver, () => { draft.meta.transports = [] })
 const selectedPageId = ref(draft.pages[0]?.id ?? '')
 const selectedPage = computed(
   () => draft.pages.find((p) => p.id === selectedPageId.value) ?? draft.pages[0] ?? null,
@@ -75,6 +97,14 @@ const pointOptions = computed(() =>
     .filter((p) => p.id.trim())
     .map((p) => ({ label: `${p.name.trim() || p.id} · ${p.id}`, value: p.id })),
 )
+const bindingPoints = computed(() => draft.points.filter((point) => point.id.trim()).map((point) => ({
+  id: point.id.trim(), name: point.name,
+  bits: point.bits.filter((bit) => bit.bit !== null).map((bit) => ({ bit: bit.bit!, name: bit.name })),
+})))
+
+function updateBindings(widget: DraftWidget, text: string): void {
+  widget.bindings = text ? JSON.parse(text) as Record<string, BindingSpec> : {}
+}
 
 function pointOf(id: string): DraftPoint | undefined {
   return draft.points.find((p) => p.id === id)
@@ -95,6 +125,7 @@ const expanded = reactive<Record<string, boolean>>({})
 
 function addPoint(): void {
   const p = newPoint(draft.points.length)
+  if (addressFormat.value === 'frame') p.frame = newFramePoint()
   const last = draft.points[draft.points.length - 1]
   const lastReg = parseInt(last?.address ?? '', 10)
   if (Number.isFinite(lastReg)) p.address = String(lastReg + 1)
@@ -160,14 +191,27 @@ function removePage(page: DraftPage): void {
   selectedPageId.value = draft.pages[Math.max(0, i - 1)]?.id ?? ''
 }
 
-const newKind = ref('core:value')
+const editorId = useId()
+const catalog = computed(() => deviceWidgetOptions())
+const externalWidgets = computed(() => new Map(catalog.value.map((item) => [item.kind, item.external])))
+const widgetOptions = computed(() => catalog.value.map((widget) => ({ label: widget.label, value: widget.kind })))
+const groupWidgetOptions = computed(() => widgetOptions.value.filter(({ value }) =>
+  isCompactWidgetKind(value) && studioBindingSlot(value) === 'value',
+))
 
-function addWidget(): void {
+function addWidget(kind: string): void {
   const page = selectedPage.value
   if (!page) return
-  const w = newWidget(newKind.value, pointOptions.value[0]?.value ?? '')
-  w.rect = appendRect(page, w)
+  const size = widgetDefaultSize(kind)
+  const rect = nextWidgetRect(page.widgets.map((widget) => widget.rect), size)
+  if (!rect) {
+    toast.error('当前画布没有可用位置')
+    return
+  }
+  const w = newWidget(kind, pointOptions.value[0]?.value ?? '', size)
+  w.rect = rect
   page.widgets.push(w)
+  void revealWidget(page.widgets.length - 1)
 }
 
 function removeWidget(page: DraftPage, index: number): void {
@@ -181,12 +225,14 @@ function moveWidget(page: DraftPage, index: number, delta: number): void {
   page.widgets.splice(j, 0, w)
 }
 
-function setConfigNumber(w: DraftWidget, key: 'decimals' | 'min' | 'max', v: number | null): void {
-  w.config[key] = v
+async function revealWidget(index: number): Promise<void> {
+  await nextTick()
+  document.getElementById(`${editorId}-widget-${index}`)?.scrollIntoView({ block: 'nearest' })
 }
 
-function setConfigText(w: DraftWidget, key: 'unit' | 'onLabel' | 'offLabel', v: string): void {
-  w.config[key] = v
+function moveOnCanvas(index: number, rect: WidgetRect): void {
+  const widget = selectedPage.value?.widgets[index]
+  if (widget) widget.rect = rect
 }
 
 function setRect(rect: WidgetRect, key: keyof WidgetRect, v: number | null): void {
@@ -358,6 +404,9 @@ function previewStyle(w: DraftWidget): Record<string, string> {
 }
 
 function bindText(w: DraftWidget): string {
+  const slot = studioBindingSlot(w.kind)
+  if (!slot) return ''
+  if (slot === 'values') return w.points.length ? `${w.points.length} 个点位` : '未绑定'
   const p = pointOf(w.point)
   const label = p ? `${p.name || p.id}${w.bit !== null ? `.b${w.bit}` : ''}` : ''
   return label || '未绑定'
@@ -424,12 +473,31 @@ onBeforeUnmount(() => {
             <label>驱动</label>
             <n-select v-model:value="draft.meta.driver" :options="driverOptions" />
           </div>
+          <div class="field">
+            <label>可用传输</label>
+            <n-select v-model:value="draft.meta.transports" :options="transportOptions" multiple clearable placeholder="沿用驱动支持的全部传输" />
+          </div>
+          <div v-if="addressFormat === 'register'" class="field">
+            <label>Modbus 封装</label>
+            <n-select v-model:value="draft.meta.framing" :options="[
+              { label: '按通道自动选择', value: 'auto' }, { label: 'RTU（含透传）', value: 'rtu' }, { label: 'TCP（MBAP）', value: 'tcp' },
+            ]" placeholder="按通道自动选择" />
+          </div>
+          <div v-else-if="addressFormat === 'frame' && draft.meta.frameProbe" class="field span-2 card protocol-frame-card">
+            <strong>在线探测帧</strong>
+            <p class="muted small">十六进制字节用空格分隔。用 <code>{unit}</code> 代入设备地址。</p>
+            <FrameFields v-model="draft.meta.frameProbe" />
+          </div>
+          <div v-else class="field span-2">
+            <label>驱动参数（JSON）</label>
+            <n-input v-model:value="draft.meta.paramsJson" type="textarea" placeholder="{}" />
+          </div>
           <div class="field span-2">
             <label>描述</label>
             <n-input v-model:value="draft.meta.description" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" />
           </div>
         </div>
-        <p class="muted small studio-hint">
+        <p v-if="addressFormat === 'register'" class="muted small studio-hint">
           下一步填点表：寄存器用工程记法（0xxxx 线圈 / 1xxxx 离散 / 3xxxx 输入 / 4xxxx 保持）。
         </p>
       </section>
@@ -448,7 +516,7 @@ onBeforeUnmount(() => {
               :value="g.name"
               size="small"
               placeholder="组名"
-              style="width: 160px"
+              class="w-160"
               @update:value="(v: string) => renameGroup(gi, v)"
             />
             <n-input-number
@@ -456,7 +524,7 @@ onBeforeUnmount(() => {
               size="small"
               :min="50"
               :step="50"
-              style="width: 150px"
+              class="w-150"
               @update:value="(v: number | null) => (g.intervalMs = v)"
             />
             <span class="muted small">ms</span>
@@ -483,36 +551,37 @@ onBeforeUnmount(() => {
 
           <div v-for="(p, pi) in draft.points" :key="p.key" class="studio-point">
             <div class="studio-point-head">
-              <n-input v-model:value="p.id" size="small" placeholder="id" class="mono" style="width: 130px" />
-              <n-input v-model:value="p.name" size="small" placeholder="显示名" style="width: 180px" />
-              <n-input v-model:value="p.address" size="small" placeholder="40101" class="mono" style="width: 110px" />
-              <span class="studio-area mono">{{ areaOfRegister(p.address) ?? '?' }}</span>
+              <n-input v-model:value="p.id" size="small" placeholder="id" class="mono w-130" />
+              <n-input v-model:value="p.name" size="small" placeholder="显示名" class="w-180" />
+              <n-input v-if="addressFormat !== 'frame'" v-model:value="p.address" size="small"
+                :placeholder="addressFormat === 'register' ? '40101' : '地址对象（JSON）'" class="mono w-110" />
+              <span v-if="addressFormat === 'register'" class="studio-area mono">{{ areaOfRegister(p.address) ?? '?' }}</span>
               <n-select
                 v-model:value="p.type"
                 size="small"
                 :options="POINT_TYPES.map((t) => ({ label: t, value: t }))"
-                :disabled="isBitArea(p.address)"
-                style="width: 100px"
+                :disabled="addressFormat === 'register' && isBitArea(p.address)"
+                class="w-100"
               />
               <n-select
                 v-model:value="p.byteOrder"
                 size="small"
                 :options="byteOrderOptions"
-                :disabled="isBitArea(p.address)"
-                style="width: 88px"
+                :disabled="addressFormat === 'register' && isBitArea(p.address)"
+                class="w-90"
               />
               <n-select
                 v-model:value="p.access"
                 size="small"
                 :options="[{ label: '只读 r', value: 'r' }, { label: '读写 rw', value: 'rw' }]"
-                :disabled="areaOfRegister(p.address) === 'input' || areaOfRegister(p.address) === 'discrete'"
-                style="width: 100px"
+                :disabled="addressFormat === 'register' && ['input', 'discrete'].includes(areaOfRegister(p.address) ?? '')"
+                class="w-100"
               />
               <n-select
                 v-model:value="p.pollGroup"
                 size="small"
                 :options="groupOptions"
-                style="width: 120px"
+                class="w-120"
               />
               <span class="spacer" />
               <n-button size="tiny" quaternary @click="expanded[p.key] = !expanded[p.key]">
@@ -521,8 +590,25 @@ onBeforeUnmount(() => {
               <n-button size="tiny" quaternary type="error" @click="removePoint(pi)">删除</n-button>
             </div>
 
+            <div v-if="addressFormat === 'frame' && p.frame" class="protocol-point-frames">
+              <div class="field card protocol-frame-card">
+                <strong>读取帧</strong>
+                <FrameFields v-model="p.frame.read" />
+                <label class="field"><span>应答中数值的字节偏移（从 0 开始）</span>
+                  <n-input-number v-model:value="p.frame.valueOffset" size="small" :min="0" :max="511" :precision="0" />
+                </label>
+              </div>
+              <div v-if="p.access === 'rw'" class="field card protocol-frame-card">
+                <strong>写入帧</strong>
+                <FrameFields v-model="p.frame.write.frame" />
+                <label class="field"><span>请求中数值的字节偏移（用 00 占位）</span>
+                  <n-input-number v-model:value="p.frame.write.valueOffset" size="small" :min="0" :max="511" :precision="0" />
+                </label>
+              </div>
+            </div>
+
             <div v-if="expanded[p.key]" class="studio-point-more">
-              <template v-if="!isBitArea(p.address)">
+              <template v-if="addressFormat !== 'register' || !isBitArea(p.address)">
                 <label class="studio-mini">
                   scale
                   <n-input-number v-model:value="p.scale" size="tiny" :step="0.1" placeholder="1" />
@@ -546,7 +632,7 @@ onBeforeUnmount(() => {
               </template>
               <label class="studio-mini">
                 单位
-                <n-input v-model:value="p.unit" size="tiny" placeholder="V / A / kWh" style="width: 110px" />
+                <n-input v-model:value="p.unit" size="tiny" placeholder="V / A / kWh" class="w-110" />
               </label>
 
               <div v-if="!isBitArea(p.address)" class="studio-sub">
@@ -555,10 +641,10 @@ onBeforeUnmount(() => {
                   <n-button size="tiny" quaternary @click="addBit(p)">加位</n-button>
                 </div>
                 <div v-for="(b, bi) in p.bits" :key="bi" class="studio-inline">
-                  <n-input-number v-model:value="b.bit" size="tiny" :min="0" :max="15" style="width: 72px" />
-                  <n-input v-model:value="b.name" size="tiny" placeholder="位名称" style="width: 150px" />
-                  <n-input v-model:value="b.on" size="tiny" placeholder="置位文案" style="width: 110px" />
-                  <n-input v-model:value="b.off" size="tiny" placeholder="复位文案" style="width: 110px" />
+                  <n-input-number v-model:value="b.bit" size="tiny" :min="0" :max="15" class="w-72" />
+                  <n-input v-model:value="b.name" size="tiny" placeholder="位名称" class="w-150" />
+                  <n-input v-model:value="b.on" size="tiny" placeholder="置位文案" class="w-110" />
+                  <n-input v-model:value="b.off" size="tiny" placeholder="复位文案" class="w-110" />
                   <n-button size="tiny" quaternary type="error" @click="p.bits.splice(bi, 1)">删</n-button>
                 </div>
               </div>
@@ -569,8 +655,8 @@ onBeforeUnmount(() => {
                   <n-button size="tiny" quaternary @click="addEnum(p)">加项</n-button>
                 </div>
                 <div v-for="(e, ei) in p.enum" :key="ei" class="studio-inline">
-                  <n-input-number v-model:value="e.value" size="tiny" style="width: 90px" />
-                  <n-input v-model:value="e.label" size="tiny" placeholder="显示文案" style="width: 150px" />
+                  <n-input-number v-model:value="e.value" size="tiny" class="w-90" />
+                  <n-input v-model:value="e.label" size="tiny" placeholder="显示文案" class="w-150" />
                   <n-button size="tiny" quaternary type="error" @click="p.enum.splice(ei, 1)">删</n-button>
                 </div>
               </div>
@@ -604,7 +690,7 @@ onBeforeUnmount(() => {
               <AppIcon name="x" :size="12" />
             </span>
           </button>
-          <n-button size="tiny" quaternary style="margin-top: 8px" @click="applyPresets">
+          <n-button size="tiny" quaternary class="mt-8" @click="applyPresets">
             <template #icon><AppIcon name="grid" :size="13" /></template>
             按点表生成预设页面
           </n-button>
@@ -626,24 +712,20 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <div class="studio-widget-add">
-            <n-select v-model:value="newKind" :options="CORE_WIDGET_OPTIONS" style="width: 220px" />
-            <n-button size="small" type="primary" @click="addWidget">
-              <template #icon><AppIcon name="plus" :size="14" /></template>
-              添加组件
-            </n-button>
-            <span class="muted small">12 列网格 · 行高 72px · 组件必须全部有 rect</span>
-          </div>
+          <WidgetCatalog :options="catalog" @pick="addWidget" />
+          <WidgetLayoutCanvas v-if="selectedPage.widgets.length" :key="selectedPage.id"
+            :widgets="selectedPage.widgets" :options="catalog" @move="moveOnCanvas" @select="revealWidget" />
 
-          <div v-for="(w, wi) in selectedPage.widgets" :key="w.id" class="studio-widget">
+          <div v-for="(w, wi) in selectedPage.widgets" :key="w.id"
+            :id="`${editorId}-widget-${wi}`" class="studio-widget">
             <div class="studio-widget-head">
               <n-select
                 v-model:value="w.kind"
-                :options="CORE_WIDGET_OPTIONS"
+                :options="widgetOptions"
                 size="small"
-                style="width: 200px"
+                class="w-200"
               />
-              <n-input v-model:value="w.title" size="small" placeholder="组件标题（可空）" style="width: 180px" />
+              <n-input v-model:value="w.title" size="small" placeholder="组件标题（可空）" class="w-180" />
               <label v-for="k in ['x', 'y', 'w', 'h'] as const" :key="k" class="studio-mini">
                 {{ k }}
                 <n-input-number
@@ -651,7 +733,7 @@ onBeforeUnmount(() => {
                   size="tiny"
                   :min="0"
                   :max="k === 'w' ? 12 : undefined"
-                  style="width: 74px"
+                  class="w-72"
                   @update:value="(v: number | null) => setRect(w.rect, k, v)"
                 />
               </label>
@@ -663,15 +745,27 @@ onBeforeUnmount(() => {
               </span>
             </div>
 
-            <div v-if="w.kind !== 'core:group'" class="studio-widget-bind">
+            <WidgetBindingsEditor v-if="externalWidgets.get(w.kind)"
+              :model-value="JSON.stringify(widgetBind(w) ?? {})" :kind="w.kind" :points="bindingPoints"
+              :declarations="externalWidgets.get(w.kind)?.bindings" @update:model-value="updateBindings(w, $event)" />
+            <div v-else-if="studioBindingSlot(w.kind) === 'values'" class="widget-binding-fields">
+              <label class="field">
+                <span>绑定多个点位</span>
+                <n-select v-model:value="w.points" :options="pointOptions" multiple filterable clearable
+                  size="small" placeholder="选择点位" />
+              </label>
+            </div>
+            <div v-else-if="studioBindingSlot(w.kind)" class="studio-widget-bind">
               <label class="studio-mini wide">
                 绑定点
                 <n-select
-                  v-model:value="w.point"
+                  :value="w.point"
                   size="small"
                   :options="pointOptions"
+                  filterable
                   placeholder="选择点位"
-                  style="width: 220px"
+                  class="w-220"
+                  @update:value="w.point = $event; w.bit = null"
                 />
               </label>
               <label v-if="bitOptionsOf(w.point).length" class="studio-mini">
@@ -682,74 +776,13 @@ onBeforeUnmount(() => {
                   clearable
                   :options="bitOptionsOf(w.point)"
                   placeholder="整字"
-                  style="width: 140px"
+                  class="w-140"
                 />
               </label>
 
-              <label v-if="w.kind === 'core:value'" class="studio-mini">
-                单位覆盖
-                <n-input
-                  :value="w.config.unit ?? ''"
-                  size="small"
-                  placeholder="用点表单位"
-                  style="width: 120px"
-                  @update:value="(v: string) => setConfigText(w, 'unit', v)"
-                />
-              </label>
-              <label v-if="w.kind === 'core:value' || w.kind === 'core:gauge'" class="studio-mini">
-                小数位
-                <n-input-number
-                  :value="w.config.decimals ?? null"
-                  size="small"
-                  :min="0"
-                  :max="6"
-                  style="width: 90px"
-                  @update:value="(v: number | null) => setConfigNumber(w, 'decimals', v)"
-                />
-              </label>
-              <template v-if="w.kind === 'core:gauge'">
-                <label class="studio-mini">
-                  min
-                  <n-input-number
-                    :value="w.config.min ?? null"
-                    size="small"
-                    style="width: 100px"
-                    @update:value="(v: number | null) => setConfigNumber(w, 'min', v)"
-                  />
-                </label>
-                <label class="studio-mini">
-                  max
-                  <n-input-number
-                    :value="w.config.max ?? null"
-                    size="small"
-                    style="width: 100px"
-                    @update:value="(v: number | null) => setConfigNumber(w, 'max', v)"
-                  />
-                </label>
-              </template>
-              <template v-if="w.kind === 'core:switch'">
-                <label class="studio-mini">
-                  合文案
-                  <n-input
-                    :value="w.config.onLabel ?? ''"
-                    size="small"
-                    style="width: 100px"
-                    @update:value="(v: string) => setConfigText(w, 'onLabel', v)"
-                  />
-                </label>
-                <label class="studio-mini">
-                  分文案
-                  <n-input
-                    :value="w.config.offLabel ?? ''"
-                    size="small"
-                    style="width: 100px"
-                    @update:value="(v: string) => setConfigText(w, 'offLabel', v)"
-                  />
-                </label>
-              </template>
             </div>
 
-            <div v-else class="studio-group">
+            <div v-else-if="w.kind === 'core:group'" class="studio-group">
               <div class="studio-sub-head">
                 <span>组合子组件</span>
                 <n-button size="tiny" quaternary @click="addGroupItem(w)">加子组件</n-button>
@@ -758,24 +791,26 @@ onBeforeUnmount(() => {
                 <n-select
                   v-model:value="item.kind"
                   size="tiny"
-                  :options="CORE_WIDGET_OPTIONS.filter((o) => o.value !== 'core:group')"
-                  style="width: 160px"
+                  :options="groupWidgetOptions"
+                  class="w-160"
                 />
-                <n-input v-model:value="item.title" size="tiny" placeholder="标题" style="width: 110px" />
-                <n-select v-model:value="item.point" size="tiny" :options="pointOptions" style="width: 170px" />
+                <n-input v-model:value="item.title" size="tiny" placeholder="标题" class="w-110" />
+                <n-select v-model:value="item.point" size="tiny" :options="pointOptions" class="w-170" />
                 <label v-for="k in ['x', 'y', 'w', 'h'] as const" :key="k" class="studio-mini">
                   {{ k }}
                   <n-input-number
                     :value="item.rect[k]"
                     size="tiny"
                     :min="0"
-                    style="width: 64px"
+                    class="w-64"
                     @update:value="(v: number | null) => setRect(item.rect, k, v)"
                   />
                 </label>
                 <n-button size="tiny" quaternary type="error" @click="w.groupItems.splice(ii, 1)">删</n-button>
               </div>
             </div>
+            <WidgetConfigEditor :kind="w.kind" :config="w.config"
+              :schema="externalWidgets.get(w.kind)?.configSchema" :defaults="externalWidgets.get(w.kind)?.config" @change="w.config = $event" />
           </div>
 
           <p v-if="!selectedPage.widgets.length" class="muted small">
@@ -793,7 +828,7 @@ onBeforeUnmount(() => {
               v-model:value="previewPageId"
               size="small"
               :options="draft.pages.map((p) => ({ label: p.title || p.id, value: p.id }))"
-              style="width: 180px"
+              class="w-180"
             />
           </div>
           <div v-if="previewPage" class="studio-canvas">
@@ -837,7 +872,7 @@ onBeforeUnmount(() => {
             <n-button size="small" type="primary" :loading="busy === 'install'" @click="installOnly">
               保存并安装
             </n-button>
-            <n-button size="small" style="margin-left: 8px" :loading="busy === 'install'" @click="installAndAdd">
+            <n-button size="small" class="ml-8" :loading="busy === 'install'" @click="installAndAdd">
               安装并添加设备
             </n-button>
           </div>

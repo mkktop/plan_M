@@ -121,6 +121,9 @@ export interface DriverInfoDto {
   id: string
   name: string
   transports: TransportKind[]
+  pointAddressFormat?: 'register' | 'frame' | 'structured'
+  scanBounds?: ScanRange | null
+  scanRequiresPackage?: boolean
 }
 
 export interface PackageDto {
@@ -165,6 +168,7 @@ export interface PackageWidgetDto {
   size: WidgetSizeDto
   bindings: Record<string, WidgetBindingDto>
   config: Record<string, unknown> | null
+  configSchema?: WidgetConfigSchema
   permissions: string[]
 }
 
@@ -260,7 +264,18 @@ export interface UiWidgetDto {
   description: string
   defaultW: number
   defaultH: number
+  configSchema?: WidgetConfigSchema
 }
+
+export type WidgetConfigSchema = Record<string, {
+  type: 'string' | 'number' | 'integer' | 'boolean' | 'select'
+  label: string
+  description?: string
+  default?: string | number | boolean | null
+  min?: number | null
+  max?: number | null
+  choices?: string[]
+}>
 
 /** UI 插件贡献点：导航页。路由为 `/plugin/<插件id>/<页面id>`。 */
 export interface UiPageDto {
@@ -303,9 +318,11 @@ export type ClientMsg =
   | { type: 'subscribe'; tags: string[] }
   | { type: 'unsubscribe'; tags: string[] }
   | { type: 'writeTag'; tag: string; value: TagValue }
-  | { type: 'scanChannel'; channel: string; driver?: string | null; range?: ScanRange | null }
+  | { type: 'scanChannel'; channel: string; driver?: string | null; package?: string | null; range?: ScanRange | null }
   | { type: 'getTransportTargets'; transport: TransportKind }
   | { type: 'getPackages' }
+  | { type: 'getPackageVersions'; id: string }
+  | { type: 'activatePackageVersion'; id: string; version: string }
   | { type: 'upsertChannel'; config: ChannelConfig }
   | { type: 'removeChannel'; channel: string }
   | { type: 'addDevice'; config: DeviceConfig }
@@ -346,6 +363,7 @@ export type ServerMsg =
   | { type: 'scanDone'; channel: string; found: DeviceAddress[] }
   | { type: 'transportTargets'; transport: TransportKind; targets: TransportTarget[] }
   | { type: 'packages'; packages: PackageDto[] }
+  | { type: 'packageVersions'; id: string; versions: string[] }
   | { type: 'dashboards'; dashboards: DashboardDto[] }
   | { type: 'uiPlugins'; plugins: UiPluginDto[] }
   | { type: 'workspaces'; workspaces: WorkspaceDto[] }

@@ -7,12 +7,13 @@ import PageHeader from '@/components/PageHeader.vue'
 import { mountPluginPage, pluginHost, pluginPageInfo } from '@/plugins/host'
 
 const route = useRoute()
+const props = defineProps<{ pluginId?: string; pageId?: string }>()
 const host = ref<HTMLElement | null>(null)
 const error = ref('')
 let cleanup: (() => void) | null = null
 
-const pluginId = computed(() => String(route.params.pluginId ?? ''))
-const pageId = computed(() => String(route.params.pageId ?? ''))
+const pluginId = computed(() => props.pluginId ?? String(route.params.pluginId ?? ''))
+const pageId = computed(() => props.pageId ?? String(route.params.pageId ?? ''))
 const info = computed(() => pluginPageInfo(pluginId.value, pageId.value))
 
 function unmount(): void {

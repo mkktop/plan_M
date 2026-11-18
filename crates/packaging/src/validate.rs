@@ -21,6 +21,13 @@ pub const ALLOWED_DEVICE_PAGE_COMPONENTS: &[&str] = &[
     "group",
     "core:value",
     "core:gauge",
+    "core:trend",
+    "core:level",
+    "core:readings",
+    "core:indicator",
+    "core:threshold",
+    "core:stats",
+    "core:text",
     "core:switch",
     "core:input",
     "core:bits",
@@ -44,6 +51,11 @@ const VALUE_SLOT_WIDGET_KINDS: &[&str] = &[
     "bits",
     "core:value",
     "core:gauge",
+    "core:trend",
+    "core:level",
+    "core:indicator",
+    "core:threshold",
+    "core:stats",
     "core:switch",
     "core:input",
     "core:bits",
@@ -362,6 +374,9 @@ fn validate_ui(m: &PackageManifest, t: &PointsTable, v: &mut ValidationIssues) {
                     comp.kind
                 ));
             }
+            if comp.kind == "core:readings" && !comp.bind.contains_key("values") {
+                v.warn(format!("{ctx}：组件 `core:readings` 未绑定 values 槽位"));
+            }
         }
     }
 }
@@ -374,6 +389,8 @@ fn validate_widget_decls(m: &PackageManifest, v: &mut ValidationIssues) {
     let mut ids = std::collections::HashSet::new();
     for w in &m.ui.widgets {
         let ctx = format!("ui.widgets `{}`", w.id);
+        v.errors
+            .extend(widget_config_issues(&ctx, &w.config_schema, &w.config));
         if !valid_local_id(&w.id) {
             v.error(format!(
                 "{ctx}：id 非法（字母/数字/-/_，≤64，且须以字母或数字开头）"
@@ -439,6 +456,30 @@ fn validate_widget_decls(m: &PackageManifest, v: &mut ValidationIssues) {
             }
         }
     }
+}
+
+pub(crate) fn widget_config_issues(
+    context: &str,
+    schema: &hmi_domain::widget_config::WidgetConfigSchema,
+    config: &serde_json::Value,
+) -> Vec<String> {
+    use hmi_domain::widget_config::FieldType;
+    let mut issues = Vec::new();
+    for (key, field) in schema {
+        if !valid_local_id(key)
+            || field.label.trim().is_empty()
+            || field.min.zip(field.max).is_some_and(|(min, max)| min > max)
+            || field.kind == FieldType::Select && field.choices.is_empty()
+        {
+            issues.push(format!("{context} 的配置字段 `{key}` 定义无效"));
+        }
+        for default in field.default.iter().chain(config.get(key)) {
+            if !field.accepts(default) {
+                issues.push(format!("{context} 的配置字段 `{key}` 默认值无效"));
+            }
+        }
+    }
+    issues
 }
 
 /// 校验 `core:group` 的声明式子组件。

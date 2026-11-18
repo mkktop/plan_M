@@ -54,6 +54,8 @@ pub enum ClientMsg {
         channel: String,
         #[serde(default)]
         driver: Option<String>,
+        #[serde(default)]
+        package: Option<String>,
         range: Option<ScanRange>,
     },
     /// 枚举某种传输的可发现目标（串口列表等）
@@ -62,6 +64,13 @@ pub enum ClientMsg {
     },
     /// 已安装设备包清单
     GetPackages,
+    GetPackageVersions {
+        id: String,
+    },
+    ActivatePackageVersion {
+        id: String,
+        version: String,
+    },
     /// 新增/更新通道
     UpsertChannel {
         config: ChannelConfig,
@@ -179,6 +188,10 @@ pub enum ServerMsg {
     Packages {
         packages: Vec<PackageDto>,
     },
+    PackageVersions {
+        id: String,
+        versions: Vec<String>,
+    },
     /// 仪表盘列表（get/save/remove 的统一应答）
     Dashboards {
         dashboards: Vec<DashboardDto>,
@@ -262,6 +275,12 @@ pub struct DriverInfoDto {
     pub id: String,
     pub name: String,
     pub transports: Vec<TransportKind>,
+    #[serde(default)]
+    pub point_address_format: String,
+    #[serde(default)]
+    pub scan_bounds: Option<ScanRange>,
+    #[serde(default)]
+    pub scan_requires_package: bool,
 }
 
 /// 设备包 UI 声明。
@@ -297,6 +316,8 @@ pub struct PackageWidgetDto {
     /// 配置 schema / 默认值（宿主原样透传给组件）
     #[serde(default)]
     pub config: serde_json::Value,
+    #[serde(default)]
+    pub config_schema: hmi_domain::widget_config::WidgetConfigSchema,
     /// tags:read / tags:write / notify
     #[serde(default)]
     pub permissions: Vec<String>,
@@ -597,6 +618,8 @@ pub struct UiWidgetDto {
     pub default_w: u32,
     #[serde(default = "default_widget_h")]
     pub default_h: u32,
+    #[serde(default)]
+    pub config_schema: hmi_domain::widget_config::WidgetConfigSchema,
 }
 
 fn default_widget_w() -> u32 {
@@ -734,6 +757,7 @@ mod tests {
             permissions: vec!["tags:subscribe".into()],
             entry: "index.js".into(),
             widgets: vec![UiWidgetDto {
+                config_schema: Default::default(),
                 id: "meter".into(),
                 name: "仪表卡片".into(),
                 description: String::new(),
@@ -922,6 +946,7 @@ mod tests {
             ui: PackageUiDto {
                 pages: vec![],
                 widgets: vec![PackageWidgetDto {
+                    config_schema: Default::default(),
                     id: "trend".into(),
                     title: "趋势图".into(),
                     description: String::new(),

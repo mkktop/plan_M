@@ -18,13 +18,15 @@
 gatewayd pkg validate examples/packages/pm3000
 
 # 无硬件轮询（虚拟从站预置数据）
-gatewayd poll --package examples/packages/pm3000 --com SIM --once
+gatewayd poll --package examples/packages/pm3000 --transport sim --once
 
 # 真硬件轮询
-gatewayd poll --package examples/packages/pm3000 --com COM3 --slave 1
+gatewayd poll --package examples/packages/pm3000 --com COM3 --address 1
 
 # 安装到正式包目录
 gatewayd pkg install examples/packages/pm3000
 ```
 
 地址记法：`40101` = 保持寄存器第 101 个（0 基偏移 100），与设备手册口径一致。
+
+通道、扫描与点表换算见 [设备接入指南](../../../docs/DEVICE_INTEGRATION.md)。

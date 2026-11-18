@@ -101,7 +101,7 @@ async fn ws_full_protocol_smoke() {
         .iter()
         .find(|p| p.id == "com.acme.pm3000")
         .unwrap();
-    assert_eq!(pm.ui.pages.len(), 6, "演示包应声明六页工作区");
+    assert_eq!(pm.ui.pages.len(), 7, "演示包应声明七页工作区");
     assert_eq!(pm.ui.pages[0].components[0].kind, "overview");
     // P3：包自带 ESM 组件声明随包下发（UI 据此注册 kind + 入口 URL）
     assert_eq!(pm.ui.widgets.len(), 1);
@@ -130,6 +130,18 @@ async fn ws_full_protocol_smoke() {
         Some((0, 0, 3, 2)),
         "网格位置应随 snapshot 下发"
     );
+    let readings = pm
+        .ui
+        .pages
+        .iter()
+        .find(|p| p.id == "widget-demo")
+        .and_then(|page| {
+            page.components
+                .iter()
+                .find(|component| component.kind == "core:readings")
+        })
+        .expect("组件示例应包含多点读数");
+    assert_eq!(readings.bind["values"].decls().len(), 3);
 
     // 3. 订阅 pm1.uab，等待第一个 Good 值（模拟从站预置 2201 → 220.1V）
     send(

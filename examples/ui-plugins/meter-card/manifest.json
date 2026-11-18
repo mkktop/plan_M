@@ -14,7 +14,12 @@
       "name": "仪表卡片",
       "description": "绑定任意数值 tag，显示数值/单位/质量与进度环；config 支持 min / max / decimals。",
       "defaultW": 3,
-      "defaultH": 2
+      "defaultH": 2,
+      "configSchema": {
+        "min": { "type": "number", "label": "量程下限", "default": 0 },
+        "max": { "type": "number", "label": "量程上限", "default": 100 },
+        "decimals": { "type": "integer", "label": "小数位", "min": 0, "max": 6, "default": 1 }
+      }
     }
   ],
   "pages": [

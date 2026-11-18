@@ -8,7 +8,7 @@ defineProps<{ title: string; subtitle?: string }>()
       <h2>{{ title }}</h2>
       <p v-if="subtitle" class="muted">{{ subtitle }}</p>
     </div>
-    <div class="page-actions">
+    <div v-if="$slots.default" class="page-actions">
       <slot />
     </div>
   </header>

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 2,
+  "id": "com.example.fixed-frame-meter",
+  "name": "固定帧演示表",
+  "version": "1.0.0",
+  "protocol": {
+    "driver": "frame",
+    "transports": ["serial", "tcp"],
+    "params": {
+      "probe": { "request": "{unit} 10", "responseBytes": 4, "responsePrefix": "{unit} 90" }
+    }
+  },
+  "ui": {
+    "pages": [
+      {
+        "schemaVersion": 2,
+        "id": "readings",
+        "title": "固定帧监控",
+        "icon": "pulse",
+        "widgets": [
+          { "kind": "core:value", "title": "当前设定值", "bind": { "value": { "point": "setpoint" } } },
+          { "kind": "core:input", "title": "写入设定值", "bind": { "value": { "point": "setpoint" } } }
+        ]
+      }
+    ]
+  }
+}

@@ -1,13 +1,19 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { NButton, NInput, NSelect } from 'naive-ui'
+import { computed, nextTick, ref, useId } from 'vue'
+import { NButton, NInput, NInputNumber, NSelect } from 'naive-ui'
 import AppIcon from '@/components/AppIcon.vue'
 import ModalShell from '@/components/ModalShell.vue'
+import WidgetBindingsEditor from '@/components/device/WidgetBindingsEditor.vue'
+import WidgetCatalog from '@/components/device/WidgetCatalog.vue'
+import WidgetConfigEditor from '@/components/device/WidgetConfigEditor.vue'
+import WidgetLayoutCanvas from '@/components/device/WidgetLayoutCanvas.vue'
 import { useProjectStore } from '@/stores/project'
 import { useWorkspacesStore } from '@/stores/workspaces'
 import { errorMessage, useToastStore } from '@/stores/toast'
 import { clonePages, normalizeComponentKind } from '@/utils/devicePages'
 import { deviceWidgetOptions, widgetDefaultSize } from '@/plugins/deviceWidgets'
+import { nextWidgetRect } from '@/utils/widgetGrid'
+import { widgetConfigError } from '@/utils/widgetConfig'
 import type { BindingDecl, BindingSpec, DevicePageDto, WidgetRect } from '@/api/types'
 
 const props = defineProps<{
@@ -15,6 +21,13 @@ const props = defineProps<{
   packageName: string
   pages: DevicePageDto[]
   overridden: boolean
+  initialPageId?: string
+  workspaceKey?: string
+  scopeLabel?: string
+  system?: boolean
+  singlePage?: boolean
+  protectedPageIds?: string[]
+  inheritedLabel?: string
 }>()
 
 const emit = defineEmits<{ (e: 'close'): void; (e: 'saved'): void }>()
@@ -58,14 +71,38 @@ function toEditor(pages: DevicePageDto[]): EditorPage[] {
 }
 
 const draft = ref<EditorPage[]>(toEditor(props.pages))
-const selectedId = ref(draft.value[0]?.id ?? '')
+const original = JSON.stringify(draft.value)
+const selectedId = ref(draft.value.find((page) => page.id === props.initialPageId)?.id ?? draft.value[0]?.id ?? '')
 const saving = ref(false)
 const confirmReset = ref(false)
+const confirmClose = ref(false)
+const dirty = computed(() => JSON.stringify(draft.value) !== original)
+
+function requestClose(): void {
+  if (saving.value) return
+  if (dirty.value) confirmClose.value = true
+  else emit('close')
+}
 
 const selectedPage = computed(() => draft.value.find((p) => p.id === selectedId.value) ?? null)
+const editorId = useId()
+const catalog = computed(() => deviceWidgetOptions(pkg.value, props.system ? { packages: project.packages } : undefined))
+const byKind = computed(() => new Map(catalog.value.map((item) => [item.kind, item])))
+const workspaceKey = computed(() => props.workspaceKey ?? props.typeId)
+const inheritedLabel = computed(() => props.inheritedLabel ?? '包默认布局')
+const scopeLabel = computed(() => props.scopeLabel ?? '同型号设备')
+const bindableDevices = computed(() => project.devices.map((device) => ({
+  id: device.id,
+  name: device.name,
+  points: project.packageById.get(device.package)?.points ?? [],
+})))
+
+function widgetSize(kind: string) {
+  return byKind.value.get(kind)?.external?.size ?? widgetDefaultSize(kind, pkg.value)
+}
 
 const componentOptions = computed(() =>
-  deviceWidgetOptions(pkg.value).map((c) => ({
+  catalog.value.map((c) => ({
     label: c.label,
     value: c.kind,
   })),
@@ -96,13 +133,14 @@ function addPage(): void {
     id: nextPageId(),
     title: `新页面 ${draft.value.length + 1}`,
     icon: 'grid',
-    components: [{ kind: 'core:overview', title: '', bindText: '', rect: null, configText: '' }],
+    components: [],
   }
   draft.value.push(page)
   selectedId.value = page.id
 }
 
 function removePage(page: EditorPage): void {
+  if (props.protectedPageIds?.includes(page.id)) return
   if (draft.value.length <= 1) {
     toast.error('至少保留一个页面')
     return
@@ -121,14 +159,17 @@ function movePage(page: EditorPage, delta: number): void {
   draft.value.splice(j, 0, p)
 }
 
-function addComponent(): void {
+function addComponent(kind: string): void {
   const page = selectedPage.value
   if (!page) return
-  const grid = pageGrid.value
-  const kind = grid ? 'core:value' : 'core:overview'
-  const size = widgetDefaultSize(kind, pkg.value)
-  const rect = grid ? { x: 0, y: nextRow(page.components), ...size } : null
+  const rects = page.components.flatMap((component) => component.rect ? [component.rect] : [])
+  const rect = pageGrid.value ? nextWidgetRect(rects, widgetSize(kind)) : null
+  if (pageGrid.value && !rect) {
+    toast.error('当前画布没有可用位置')
+    return
+  }
   page.components.push({ kind, title: '', bindText: '', rect, configText: '' })
+  void revealWidget(page.components.length - 1)
 }
 
 const pageGrid = computed(
@@ -148,21 +189,30 @@ function setPageLayout(mode: 'grid' | 'flow'): void {
     })
     return
   }
-  let y = 0
-  page.components.forEach((c) => {
-    const size = widgetDefaultSize(c.kind, pkg.value)
-    c.rect = { x: 0, y, ...size }
-    y += size.h
-  })
+  const placements: WidgetRect[] = []
+  for (const c of page.components) {
+    const rect = nextWidgetRect(placements, widgetSize(c.kind))
+    if (!rect) {
+      toast.error('组件无法放入 12 列画布，请减少组件数量')
+      return
+    }
+    placements.push(rect)
+  }
+  page.components.forEach((c, index) => { c.rect = placements[index] })
 }
 
 function setKind(comp: EditorComponent, kind: string): void {
   comp.kind = kind
-  if (comp.rect) {
-    const size = widgetDefaultSize(kind, pkg.value)
-    comp.rect.w = size.w
-    comp.rect.h = size.h
-  }
+}
+
+async function revealWidget(index: number): Promise<void> {
+  await nextTick()
+  document.getElementById(`${editorId}-widget-${index}`)?.scrollIntoView({ block: 'nearest' })
+}
+
+function moveOnCanvas(index: number, rect: WidgetRect): void {
+  const component = selectedPage.value?.components[index]
+  if (component) component.rect = rect
 }
 
 function ensureRect(comp: EditorComponent): WidgetRect {
@@ -211,6 +261,14 @@ function parseObject(text: string, label: string): Record<string, unknown> | nul
 
 function parseConfig(text: string): Record<string, unknown> | null {
   return parseObject(text, '组件配置 config ')
+}
+
+function draftConfig(text: string): Record<string, unknown> | null {
+  try {
+    return parseConfig(text) ?? {}
+  } catch {
+    return null
+  }
 }
 
 /** 绑定：槽位 → { point, bit } 或 { tag }（也接受声明数组，多点槽位）。 */
@@ -280,6 +338,10 @@ function buildPages(): DevicePageDto[] {
     if (!p.title.trim()) throw new Error(`页面 ${p.id} 缺少标题`)
     if (!p.components.length) throw new Error(`页面「${p.title}」至少需要一个组件`)
     validateRects(p.components, p.title)
+    for (const component of p.components) {
+      const invalid = widgetConfigError(byKind.value.get(component.kind)?.external?.configSchema, parseConfig(component.configText))
+      if (invalid) throw new Error(`页面「${p.title}」${invalid}`)
+    }
     return {
       id: p.id,
       title: p.title.trim(),
@@ -306,8 +368,8 @@ async function save(): Promise<void> {
   }
   saving.value = true
   try {
-    await workspaces.save({ deviceType: props.typeId, pages })
-    toast.success('设备页面已保存')
+    await workspaces.save({ deviceType: workspaceKey.value, pages })
+    toast.success(`已保存${scopeLabel.value}的页面布局`)
     emit('saved')
     emit('close')
   } catch (e) {
@@ -324,8 +386,8 @@ async function reset(): Promise<void> {
   }
   saving.value = true
   try {
-    await workspaces.remove(props.typeId)
-    toast.success('已恢复设备包默认页面')
+    await workspaces.remove(workspaceKey.value)
+    toast.success(`已恢复${inheritedLabel.value}`)
     emit('saved')
     emit('close')
   } catch (e) {
@@ -338,42 +400,43 @@ async function reset(): Promise<void> {
 
 <template>
   <ModalShell
-    title="编辑设备页面"
-    :subtitle="`${packageName} · 页面按设备类型共享${overridden ? ' · 当前使用自定义页面' : ' · 当前使用包默认页面'}`"
+    title="编辑页面布局"
+    :subtitle="`${packageName} · ${scopeLabel} · ${overridden ? '自定义布局' : inheritedLabel}`"
     :width="980"
-    @close="emit('close')"
+    @close="requestClose"
   >
     <div class="page-editor">
       <aside class="page-editor-list">
         <div class="page-editor-list-head">
           <span>页面</span>
-          <n-button size="tiny" quaternary @click="addPage">
+          <n-button v-if="!singlePage" size="tiny" quaternary @click="addPage">
             <template #icon><AppIcon name="plus" :size="13" /></template>
             新增
           </n-button>
         </div>
 
-        <button
+        <div
           v-for="page in draft"
           :key="page.id"
-          type="button"
           class="page-editor-item"
           :class="{ active: page.id === selectedId }"
-          @click="selectedId = page.id"
         >
-          <span class="page-editor-item-icon"><AppIcon :name="page.icon || 'grid'" :size="14" /></span>
-          <span class="page-editor-item-main">
-            <strong>{{ page.title || '未命名页面' }}</strong>
-            <small>{{ page.components.length }} 个组件</small>
-          </span>
-          <span class="page-editor-item-tools">
-            <span class="icon-btn tiny" title="上移" @click.stop="movePage(page, -1)">↑</span>
-            <span class="icon-btn tiny" title="下移" @click.stop="movePage(page, 1)">↓</span>
-            <span class="icon-btn tiny" title="删除页面" @click.stop="removePage(page)">
-              <AppIcon name="x" :size="12" />
+          <button type="button" class="page-editor-trigger" :aria-current="page.id === selectedId ? 'page' : undefined"
+            @click="selectedId = page.id">
+            <span class="page-editor-item-icon"><AppIcon :name="page.icon || 'grid'" :size="14" /></span>
+            <span class="page-editor-item-main">
+              <strong>{{ page.title || '未命名页面' }}</strong>
+              <small>{{ page.components.length }} 个组件</small>
             </span>
+          </button>
+          <span v-if="!singlePage" class="page-editor-item-tools">
+            <button class="icon-btn tiny" type="button" :aria-label="`上移${page.title}`" title="上移" @click="movePage(page, -1)">↑</button>
+            <button class="icon-btn tiny" type="button" :aria-label="`下移${page.title}`" title="下移" @click="movePage(page, 1)">↓</button>
+            <button v-if="!protectedPageIds?.includes(page.id)" class="icon-btn tiny" type="button" aria-label="删除页面" title="删除页面" @click="removePage(page)">
+              <AppIcon name="x" :size="12" />
+            </button>
           </span>
-        </button>
+        </div>
       </aside>
 
       <section v-if="selectedPage" class="page-editor-main">
@@ -402,16 +465,22 @@ async function reset(): Promise<void> {
             </n-button>
           </div>
 
+          <WidgetCatalog :options="catalog" @pick="addComponent" />
+          <p v-if="!selectedPage.components.length" class="muted small">从组件库添加第一个组件。</p>
+          <WidgetLayoutCanvas v-if="pageGrid" :key="selectedPage.id" :widgets="selectedPage.components" :options="catalog"
+            @move="moveOnCanvas" @select="revealWidget" />
+
           <div
             v-for="(comp, index) in selectedPage.components"
             :key="index"
+            :id="`${editorId}-widget-${index}`"
             class="component-row"
           >
             <div class="component-row-head">
               <n-select
                 :value="comp.kind"
                 :options="componentOptions"
-                style="width: 240px"
+                class="w-240"
                 @update:value="(v: string) => setKind(comp, v)"
               />
               <n-input v-model:value="comp.title" placeholder="组件标题（可空）" />
@@ -464,7 +533,14 @@ async function reset(): Promise<void> {
                 />
               </label>
             </div>
-            <div class="form-grid">
+            <WidgetBindingsEditor v-model="comp.bindText" :kind="comp.kind" :points="pkg?.points ?? []"
+              :devices="bindableDevices" :declarations="byKind.get(comp.kind)?.external?.bindings" />
+            <WidgetConfigEditor v-if="draftConfig(comp.configText)" :kind="comp.kind" :config="draftConfig(comp.configText)!"
+              :schema="byKind.get(comp.kind)?.external?.configSchema" :defaults="byKind.get(comp.kind)?.external?.config"
+              @change="comp.configText = Object.keys($event).length ? JSON.stringify($event, null, 2) : ''" />
+            <details class="widget-json">
+              <summary>绑定与配置 JSON</summary>
+              <div class="form-grid">
               <div class="field">
                 <label>绑定 bind（槽位 → 点/位，JSON）</label>
                 <n-input
@@ -483,18 +559,14 @@ async function reset(): Promise<void> {
                   placeholder="组件参数，可空"
                 />
               </div>
-            </div>
+              </div>
+            </details>
           </div>
-
-          <n-button size="small" quaternary @click="addComponent">
-            <template #icon><AppIcon name="plus" :size="14" /></template>
-            添加组件
-          </n-button>
         </div>
 
         <div v-if="confirmReset" class="banner warn">
           <AppIcon name="alert" :size="16" />
-          <span>恢复默认会丢弃当前类型的所有自定义页面，确认继续？</span>
+          <span>恢复{{ inheritedLabel }}会移除{{ scopeLabel }}的布局覆盖。</span>
           <n-button size="tiny" quaternary @click="confirmReset = false">取消</n-button>
           <n-button size="tiny" type="error" :loading="saving" @click="reset">确认恢复</n-button>
         </div>
@@ -510,10 +582,15 @@ async function reset(): Promise<void> {
         :disabled="saving"
         @click="reset"
       >
-        恢复包默认页面
+        恢复{{ inheritedLabel }}
       </n-button>
       <span class="spacer" />
-      <n-button size="small" @click="emit('close')">取消</n-button>
+      <template v-if="confirmClose">
+        <span class="muted small" role="status">布局还有未保存的修改</span>
+        <n-button size="small" @click="confirmClose = false">继续编辑</n-button>
+        <n-button size="small" type="error" @click="emit('close')">放弃修改</n-button>
+      </template>
+      <n-button v-else size="small" :disabled="saving" @click="requestClose">取消</n-button>
       <n-button size="small" type="primary" :loading="saving" @click="save">保存页面</n-button>
     </template>
   </ModalShell>

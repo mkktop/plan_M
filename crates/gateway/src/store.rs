@@ -29,7 +29,7 @@ impl ConfigStore for JsonConfigStore {
             return Ok(ProjectConfig::default());
         }
         let text = std::fs::read_to_string(&self.path)?;
-        let cfg: ProjectConfig = serde_json::from_str(&text)
+        let cfg: ProjectConfig = decode_project(&text)
             .map_err(|e| anyhow::anyhow!("解析 {} 失败: {e}", self.path.display()))?;
         Ok(cfg)
     }
@@ -46,9 +46,64 @@ impl ConfigStore for JsonConfigStore {
     }
 }
 
+/// Migrate the serial-only project shape in memory. The next successful edit persists v2.
+fn decode_project(text: &str) -> serde_json::Result<ProjectConfig> {
+    let mut raw: serde_json::Value = serde_json::from_str(text)?;
+    if let Some(channels) = raw.get_mut("channels").and_then(|v| v.as_array_mut()) {
+        for channel in channels.iter_mut().filter_map(|v| v.as_object_mut()) {
+            if channel.contains_key("transport") || !channel.contains_key("port") {
+                continue;
+            }
+            let transport = if channel.get("port").and_then(|v| v.as_str()) == Some("SIM") {
+                "sim"
+            } else {
+                "serial"
+            };
+            channel.insert("transport".into(), transport.into());
+            if !channel.contains_key("timing") {
+                let timing = ["respTimeoutMs", "retries", "probeIntervalMs"]
+                    .into_iter()
+                    .filter_map(|key| channel.remove(key).map(|value| (key.to_string(), value)))
+                    .collect::<serde_json::Map<_, _>>();
+                channel.insert("timing".into(), timing.into());
+            }
+        }
+    }
+    if let Some(devices) = raw.get_mut("devices").and_then(|v| v.as_array_mut()) {
+        for device in devices.iter_mut().filter_map(|v| v.as_object_mut()) {
+            if !device.contains_key("address") {
+                if let Some(slave) = device.remove("slave") {
+                    device.insert("address".into(), slave);
+                }
+            }
+        }
+    }
+    serde_json::from_value(raw)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_serial_and_sim_channels_keep_device_addresses_and_timing() {
+        let config = decode_project(
+            r#"{
+            "channels":[{"id":"field","port":"COM7","respTimeoutMs":325,"retries":3},
+                        {"id":"demo","port":"SIM"}],
+            "devices":[{"id":"meter","channelId":"field","package":"com.test.meter","slave":17}]
+        }"#,
+        )
+        .unwrap();
+        assert_eq!(config.channels[0].transport.serial().unwrap().port, "COM7");
+        assert_eq!(config.channels[0].timing.resp_timeout_ms, 325);
+        assert_eq!(config.channels[0].timing.retries, 3);
+        assert_eq!(
+            config.channels[1].transport_kind(),
+            hmi_domain::link::TransportKind::Sim
+        );
+        assert_eq!(config.devices[0].address.as_number(), Some(17));
+    }
 
     #[test]
     fn roundtrip_and_default() {

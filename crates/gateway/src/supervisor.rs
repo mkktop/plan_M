@@ -13,9 +13,10 @@ use crate::hub::TagHub;
 use hmi_domain::config::{ChannelConfig, DeviceAddress};
 use hmi_domain::driver::{DevicePlan, Driver, PollClass, PollGroup, Sample};
 use hmi_domain::link::{Link, TransportFactory};
-use hmi_domain::points::PointDef;
+use hmi_domain::points::{PointDef, PointsTable};
 use hmi_domain::protocol::ProtocolDecl;
 use hmi_domain::value::{now_ms, Quality, TagId, TagSnapshot, Value};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -95,6 +96,7 @@ pub enum GatewayEvent {
 
 /// 一个设备的运行时物料。
 pub struct DeviceRuntime {
+    pub points: PointsTable,
     pub device_id: String,
     pub address: DeviceAddress,
     pub driver: Arc<dyn Driver>,
@@ -107,7 +109,7 @@ pub struct DeviceRuntime {
 /// 通道运行时物料。
 pub struct ChannelRuntime {
     pub config: ChannelConfig,
-    pub devices: Vec<DeviceRuntime>,
+    pub devices: Vec<Arc<DeviceRuntime>>,
     pub factory: Arc<dyn TransportFactory>,
     pub hub: Arc<TagHub>,
     pub events: broadcast::Sender<GatewayEvent>,
@@ -133,12 +135,24 @@ struct Slot {
 /// 通道句柄。
 #[derive(Clone)]
 pub struct ChannelHandle {
+    devices: Arc<HashMap<String, Arc<DeviceRuntime>>>,
     pub tx: mpsc::Sender<SupervisorCmd>,
     pub shared: Arc<ChannelShared>,
     join: Arc<std::sync::Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl ChannelHandle {
+    pub(crate) fn device(&self, id: &str) -> Option<&DeviceRuntime> {
+        self.devices.get(id).map(Arc::as_ref)
+    }
+
+    pub(crate) fn tags(&self) -> Vec<TagId> {
+        self.devices
+            .values()
+            .flat_map(|device| device.all_tags.iter().cloned())
+            .collect()
+    }
+
     pub fn state(&self) -> String {
         self.shared.state()
     }
@@ -147,8 +161,14 @@ impl ChannelHandle {
     pub async fn stop(&self) {
         let _ = self.tx.send(SupervisorCmd::Stop).await;
         let handle = self.join.lock().unwrap().take();
-        if let Some(h) = handle {
-            let _ = tokio::time::timeout(Duration::from_secs(2), h).await;
+        if let Some(mut h) = handle {
+            if tokio::time::timeout(Duration::from_secs(2), &mut h)
+                .await
+                .is_err()
+            {
+                h.abort();
+                let _ = h.await;
+            }
         }
     }
 
@@ -210,6 +230,12 @@ pub fn spawn_channel(rt: ChannelRuntime, cmd_capacity: usize) -> ChannelHandle {
     let (tx, rx) = mpsc::channel(cmd_capacity);
     let join = Arc::new(std::sync::Mutex::new(None));
     let handle = ChannelHandle {
+        devices: Arc::new(
+            rt.devices
+                .iter()
+                .map(|d| (d.device_id.clone(), d.clone()))
+                .collect(),
+        ),
         tx,
         shared: shared.clone(),
         join: join.clone(),

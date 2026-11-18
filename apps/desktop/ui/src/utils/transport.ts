@@ -21,6 +21,17 @@ export function transportLabel(kind: TransportKind): string {
   return TRANSPORT_LABELS[kind] ?? kind
 }
 
+const CHANNEL_STATUS: Record<string, { label: string; tone: string }> = {
+  running: { label: '运行中', tone: 'ok' },
+  recovering: { label: '重连中', tone: 'warn' },
+  faulted: { label: '故障', tone: 'bad' },
+  stopped: { label: '已停止', tone: 'idle' },
+}
+
+export function channelStatus(state: string): { label: string; tone: string } {
+  return CHANNEL_STATUS[state] ?? { label: state, tone: 'idle' }
+}
+
 export function parityLetter(p: Parity): string {
   return p === 'none' ? 'N' : p === 'odd' ? 'O' : 'E'
 }

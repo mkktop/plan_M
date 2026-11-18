@@ -122,6 +122,16 @@ export interface WidgetHost {
 }
 
 /** manifest.json 结构（宿主会校验 schemaVersion/sdkVersion/entry/权限/贡献点 id）。 */
+export type WidgetConfigSchema = Record<string, {
+  type: 'string' | 'number' | 'integer' | 'boolean' | 'select'
+  label: string
+  description?: string
+  default?: string | number | boolean
+  min?: number
+  max?: number
+  choices?: string[]
+}>
+
 export interface PluginManifest {
   schemaVersion: 1
   id: string
@@ -140,6 +150,7 @@ export interface PluginManifest {
     /** 默认占格（仪表盘 12 列网格）。 */
     defaultW?: number
     defaultH?: number
+    configSchema?: WidgetConfigSchema
   }>
   pages?: Array<{ id: string; title: string; icon?: string }>
   /** v1 仅展示，不渲染。 */

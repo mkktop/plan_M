@@ -12,8 +12,9 @@ import {
   pluginWidgetInfo,
   pluginWidgetOptions,
 } from '@/plugins/host'
-import { HOST_DEVICE_COMPONENTS, normalizeComponentKind } from '@/utils/devicePages'
-import type { PackageDto, PackageWidgetDto, UiWidgetDto, WidgetBindingDto } from '@/api/types'
+import { defaultWidgetSize, HOST_DEVICE_COMPONENTS } from '@/utils/devicePages'
+import { pluginPageKind, systemModules } from '@/utils/systemPages'
+import type { PackageDto, PackageWidgetDto, UiWidgetDto, WidgetBindingDto, WidgetConfigSchema } from '@/api/types'
 
 export interface ExternalWidgetDescriptor {
   kind: string
@@ -29,6 +30,7 @@ export interface ExternalWidgetDescriptor {
   size: { w: number; h: number; minW: number; minH: number }
   bindings: Record<string, WidgetBindingDto>
   config: Record<string, unknown> | null
+  configSchema?: WidgetConfigSchema
   permissions: string[]
 }
 
@@ -73,6 +75,7 @@ function packageDescriptor(
     },
     bindings: widget.bindings ?? {},
     config: widget.config ?? null,
+    configSchema: widget.configSchema,
     permissions: widget.permissions ?? [],
   }
 }
@@ -101,6 +104,7 @@ function pluginDescriptor(
     // v1 插件只认识一个 value 槽位；v2 插件（mountWidget）可按需扩展。
     bindings: { value: { type: 'point', required: true } },
     config: null,
+    configSchema: widget.configSchema,
     permissions: dto.permissions ?? [],
   }
 }
@@ -128,44 +132,68 @@ export function resolveExternalWidget(
 export interface DeviceWidgetOption {
   kind: string
   label: string
+  title: string
+  icon: string
+  category: '数据' | '控制' | '布局' | '插件'
   description: string
   core: boolean
   external?: ExternalWidgetDescriptor
 }
 
 /** 设备页编辑器可选组件：核心 + 当前设备包的 ESM 组件 + 已加载插件的组件。 */
-export function deviceWidgetOptions(pkg?: PackageDto | null): DeviceWidgetOption[] {
+export function deviceWidgetOptions(
+  pkg?: PackageDto | null,
+  workspace?: { packages: PackageDto[] },
+): DeviceWidgetOption[] {
   void pluginHost.version
-  const options: DeviceWidgetOption[] = HOST_DEVICE_COMPONENTS.map((c) => ({
+  const options: DeviceWidgetOption[] = HOST_DEVICE_COMPONENTS.filter((component) =>
+    !workspace || !['core:overview', 'core:settings'].includes(component.kind),
+  ).map((c) => ({
     kind: c.kind,
     label: `${c.label} · ${c.kind}`,
+    title: c.label,
+    icon: c.icon,
+    category: c.category ?? '数据',
     description: c.description,
     core: true,
   }))
-  for (const widget of pkg?.ui?.widgets ?? []) {
-    const d = packageDescriptor(pkg as PackageDto, widget)
-    options.push({
-      kind: d.kind,
-      label: `${d.title} · ${d.providerName}`,
-      description: d.description,
-      core: false,
-      external: d,
-    })
+  for (const provider of workspace?.packages ?? (pkg ? [pkg] : [])) {
+    for (const widget of provider.ui?.widgets ?? []) {
+      const d = packageDescriptor(provider, widget)
+      options.push({
+        kind: d.kind,
+        label: `${d.title} · ${d.providerName}`,
+        title: d.title,
+        icon: 'package',
+        category: '插件',
+        description: d.description,
+        core: false,
+        external: d,
+      })
+    }
   }
-  for (const plugin of pluginHost.statuses) {
-    if (plugin.error) continue
-    const prefix = `plugin:${plugin.id}:`
-    for (const option of pluginWidgetOptions()) {
-      if (!option.kind.startsWith(prefix)) continue
+  for (const option of pluginWidgetOptions()) {
       const d = resolveExternalWidget(option.kind, pkg)
       if (!d) continue
       options.push({
         kind: d.kind,
         label: `${d.title} · ${d.providerName}`,
+        title: d.title,
+        icon: 'plugin',
+        category: '插件',
         description: d.description,
         core: false,
         external: d,
       })
+  }
+  if (workspace) {
+    for (const module of systemModules) {
+      options.push({ kind: `system:${module.id}`, label: module.title, title: module.title,
+        icon: module.icon, category: '布局', description: module.detail, core: true })
+    }
+    for (const page of pluginHost.pages) {
+      options.push({ kind: pluginPageKind(page.pluginId, page.pageId), label: page.title, title: page.title,
+        icon: page.icon, category: '插件', description: page.pluginName, core: false })
     }
   }
   return options
@@ -178,24 +206,5 @@ export function widgetDefaultSize(
 ): { w: number; h: number } {
   const external = resolveExternalWidget(kind, pkg)
   if (external) return { w: external.size.w, h: external.size.h }
-  return coreDefaultSize(normalizeComponentKind(kind))
-}
-
-function coreDefaultSize(kind: string): { w: number; h: number } {
-  switch (kind) {
-    case 'core:input':
-    case 'core:bits':
-      return { w: 4, h: 2 }
-    case 'core:group':
-      return { w: 6, h: 3 }
-    case 'core:dashboard':
-    case 'core:tags':
-      return { w: 12, h: 10 }
-    case 'core:overview':
-      return { w: 12, h: 6 }
-    case 'core:settings':
-      return { w: 12, h: 8 }
-    default:
-      return { w: 3, h: 2 }
-  }
+  return defaultWidgetSize(kind)
 }

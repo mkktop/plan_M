@@ -13,20 +13,25 @@ import AppIcon from '@/components/AppIcon.vue'
 import QualityPill from '@/components/QualityPill.vue'
 import ExternalWidgetMount from '@/components/device/ExternalWidgetMount.vue'
 import GroupBody from '@/components/device/GroupBody.vue'
+import LiveStatistics from '@/components/device/LiveStatistics.vue'
+import LiveTrend from '@/components/device/LiveTrend.vue'
 import { gateway } from '@/api/ws'
+import { useConnectionStore } from '@/stores/connection'
 import { useProjectStore } from '@/stores/project'
 import { useTagsStore } from '@/stores/tags'
 import { errorMessage, useToastStore } from '@/stores/toast'
 import { resolveExternalWidget } from '@/plugins/deviceWidgets'
 import {
+  componentLabel,
   isExternalWidgetKind,
   normalizeComponentKind,
   resolveBoundTag,
+  resolveBoundTags,
   slotBind,
 } from '@/utils/devicePages'
 import { boolOf, formatNumber, primitiveOf, qualityClass, valueText } from '@/utils/format'
+import { effectivePoint, numericTagValue } from '@/utils/devicePoints'
 import type {
-  BindingDecl,
   BitDto,
   DevicePageComponentDto,
   PointDto,
@@ -39,17 +44,13 @@ const props = defineProps<{
 }>()
 
 const project = useProjectStore()
+const connection = useConnectionStore()
 const tags = useTagsStore()
 const toast = useToastStore()
 
 const kind = computed(() => normalizeComponentKind(props.component.kind))
 const config = computed<Record<string, unknown>>(() => props.component.config ?? {})
 const binding = computed(() => slotBind(props.component.bind, 'value'))
-/** 核心小组件只认 value 槽位的第一个声明（多点槽位由外部组件宿主处理）。 */
-const bindingDecl = computed<BindingDecl | undefined>(() => {
-  const b = binding.value
-  return Array.isArray(b) ? b[0] : (b ?? undefined)
-})
 
 /** 当前设备对应的设备包（外部组件的点表元数据也按它解析）。 */
 const pkg = computed(() => {
@@ -60,7 +61,7 @@ const pkg = computed(() => {
 /** 插件 / 设备包 ESM 组件：交给统一宿主挂载。 */
 const external = computed(() =>
   isExternalWidgetKind(props.component.kind)
-    ? resolveExternalWidget(props.component.kind, pkg.value)
+    ? resolveExternalWidget(props.component.kind, project.packageById.get(props.component.kind.split(':')[0]) ?? pkg.value)
     : null,
 )
 const externalMissing = computed(
@@ -83,7 +84,11 @@ function cfgString(key: string, fallback: string): string {
 // —— 绑定解析 ——
 
 const tag = computed(() => resolveBoundTag(props.deviceId, binding.value))
-const bitBound = computed(() => typeof bindingDecl.value?.bit === 'number')
+const readingTags = computed(() => [...new Set(resolveBoundTags(props.deviceId, slotBind(props.component.bind, 'values')))])
+const unbound = computed(() => {
+  if (external.value || externalMissing.value || kind.value === 'core:group' || kind.value === 'core:text') return false
+  return kind.value === 'core:readings' ? !readingTags.value.length : !tag.value
+})
 /** 位绑定写值要写父点（gateway 的位子 tag 只读）。 */
 const parentTag = computed(() => tag.value.replace(/\.b\d+$/, ''))
 
@@ -92,9 +97,9 @@ interface Resolved {
   bit?: BitDto
 }
 
-const resolved = computed<Resolved | null>(() => {
-  if (!tag.value) return null
-  const [deviceId, pointId, bitId] = tag.value.split('.')
+function resolvePoint(fullTag: string): Resolved | null {
+  if (!fullTag) return null
+  const [deviceId, pointId, bitId] = fullTag.split('.')
   const device = project.devices.find((d) => d.id === deviceId)
   const pkg = device ? project.packageById.get(device.package) : null
   const point = pkg?.points.find((p) => p.id === pointId)
@@ -103,11 +108,16 @@ const resolved = computed<Resolved | null>(() => {
     bitId && bitId.startsWith('b')
       ? point.bits.find((b) => `b${b.bit}` === bitId)
       : undefined
-  return { point, bit }
-})
+  if (bitId && !bit) return null
+  return { point: effectivePoint(device, point), bit }
+}
+
+const resolved = computed(() => resolvePoint(tag.value))
+const bitIndex = computed(() => resolved.value?.bit?.bit)
+const bitBound = computed(() => bitIndex.value !== undefined)
 
 function changeOf(t: string) {
-  return t ? tags.get(t) : undefined
+  return t ? tags.getLive(t) : undefined
 }
 
 /** 开关绑位时订阅父点（读整字、写整字）；其余订阅目标 tag。 */
@@ -121,7 +131,7 @@ const displayTitle = computed(() => {
   if (own) return own
   if (external.value) return external.value.title
   if (externalMissing.value) return '未知组件'
-  if (!tag.value) return '未绑定组件'
+  if (!tag.value) return componentLabel(kind.value)
   const r = resolved.value
   if (!r) return tag.value
   return r.bit ? `${r.point.name} · ${r.bit.name}` : r.point.name
@@ -144,6 +154,41 @@ const decimals = computed(() => {
   return Math.max(0, Math.min(6, Math.round(n)))
 })
 
+const readings = computed(() => {
+  if (kind.value !== 'core:readings') return []
+  return readingTags.value.map((tag) => {
+    const r = resolvePoint(tag)
+    const status = tags.getLive(tag)
+    const bitValue = boolOf(status?.value)
+    const title = r?.bit ? `${r.point.name} · ${r.bit.name}` : r?.point.name || tag
+    const value = r?.bit && bitValue !== undefined
+      ? (bitValue ? (r.bit.on ?? '1') : (r.bit.off ?? '0'))
+      : valueText(status?.value)
+    return { tag, title, value, unit: r?.bit ? '' : r?.point.unit, quality: status?.quality }
+  })
+})
+
+const indicatorOn = computed(() =>
+  connection.connected && quality.value === 'good' ? boolOf(change.value?.value) : undefined,
+)
+const indicatorText = computed(() => {
+  if (indicatorOn.value === undefined) return '等待有效状态'
+  return indicatorOn.value
+    ? cfgString('onLabel', resolved.value?.bit?.on ?? '开启')
+    : cfgString('offLabel', resolved.value?.bit?.off ?? '关闭')
+})
+
+const thresholdState = computed(() => {
+  if (max.value <= min.value) return { tone: 'warn', text: '上限需大于下限' }
+  const current = primitiveOf(change.value?.value)
+  if (!connection.connected || quality.value !== 'good' || typeof current !== 'number' || !Number.isFinite(current)) {
+    return { tone: 'idle', text: '等待有效读数' }
+  }
+  if (current < min.value) return { tone: 'warn', text: '低于下限' }
+  if (current > max.value) return { tone: 'bad', text: '高于上限' }
+  return { tone: 'ok', text: '在范围内' }
+})
+
 const displayValue = computed(() => {
   const v = change.value?.value
   if (!v) return '—'
@@ -158,6 +203,19 @@ const displayValue = computed(() => {
   return valueText(v)
 })
 
+// 数值变化闪动：新值到达时短暂加 .flash（600ms）
+const flashing = ref(false)
+let flashTimer: ReturnType<typeof setTimeout> | null = null
+watch(displayValue, (cur, prev) => {
+  if (cur === prev || cur === '—') return
+  flashing.value = true
+  if (flashTimer) clearTimeout(flashTimer)
+  flashTimer = setTimeout(() => {
+    flashing.value = false
+    flashTimer = null
+  }, 600)
+})
+
 const gaugePct = computed(() => {
   const p = primitiveOf(change.value?.value)
   if (typeof p !== 'number') return 0
@@ -165,9 +223,26 @@ const gaugePct = computed(() => {
   return Math.max(0, Math.min(100, ((p - min.value) / (max.value - min.value)) * 100))
 })
 
+const levelReady = computed(() => {
+  const value = primitiveOf(change.value?.value)
+  return connection.connected && quality.value === 'good' &&
+    typeof value === 'number' && Number.isFinite(value) && max.value > min.value
+})
+
+/** 弧线端点（gauge-fill 的圆头位置）：半圆圆心 (100,100)、半径 80，180°→0°。 */
+const gaugeTipPos = computed(() => {
+  const theta = Math.PI * (1 - gaugePct.value / 100)
+  return {
+    x: Number((100 + 80 * Math.cos(theta)).toFixed(2)),
+    y: Number((100 - 80 * Math.sin(theta)).toFixed(2)),
+  }
+})
+
 const metaText = computed(() => {
   if (external.value) return externalMeta.value
   if (externalMissing.value) return '组件来源未安装或已移除'
+  if (kind.value === 'core:readings') return readings.value.length ? `${readings.value.length} 个点位` : ''
+  if (kind.value === 'core:text' || kind.value === 'core:group') return ''
   if (!tag.value) return props.component.title || '在页面编辑里填写 bind.value'
   const r = resolved.value
   if (!r) return '点不在当前点表中'
@@ -185,7 +260,7 @@ interface BitRow {
 }
 
 function qualityOf(t: string) {
-  return tags.get(t)?.quality
+  return tags.getLive(t)?.quality
 }
 
 const bitRows = computed<BitRow[]>(() => {
@@ -193,7 +268,7 @@ const bitRows = computed<BitRow[]>(() => {
   if (kind.value !== 'core:bits' || !r || r.bit) return []
   return r.point.bits.map((def) => {
     const t = `${parentTag.value}.b${def.bit}`
-    return { def, tag: t, on: boolOf(tags.get(t)?.value) ?? false, quality: qualityOf(t) }
+    return { def, tag: t, on: boolOf(tags.getLive(t)?.value) ?? false, quality: qualityOf(t) }
   })
 })
 
@@ -212,7 +287,7 @@ const switchOn = computed(() => {
   if (!bitBound.value) return boolOf(change.value?.value) ?? false
   const num = primitiveOf(change.value?.value)
   if (typeof num !== 'number') return false
-  return ((num >> (bindingDecl.value?.bit ?? 0)) & 1) === 1
+  return ((num >> (bitIndex.value ?? 0)) & 1) === 1
 })
 
 const switchOnLabel = computed(() => {
@@ -225,11 +300,6 @@ const switchOffLabel = computed(() => {
   return cfgString('offLabel', r?.bit?.off ?? 'OFF')
 })
 
-function numericTagValue(p: PointDto, v: number): TagValue {
-  if (p.area === 'coil' || p.area === 'discrete') return { bool: v !== 0 }
-  if (p.type === 'f32' || p.type === 'f64') return { f64: v }
-  return { i64: Math.round(v) }
-}
 
 async function writeTag(target: string, value: TagValue, okText: string): Promise<boolean> {
   if (writing.value) return false
@@ -252,7 +322,7 @@ async function toggleSwitch(): Promise<void> {
   const on = switchOn.value
   if (bitBound.value) {
     const num = primitiveOf(change.value?.value)
-    if (typeof num !== 'number') {
+    if (typeof num !== 'number' || change.value?.quality !== 'good') {
       toast.error('还没有读到父点当前值，稍后再试')
       return
     }
@@ -261,7 +331,7 @@ async function toggleSwitch(): Promise<void> {
       toast.error('该点带 scale/offset 换算，位写入请直接写父点')
       return
     }
-    const bit = bindingDecl.value?.bit ?? 0
+    const bit = bitIndex.value ?? 0
     const next = on ? num & ~(1 << bit) : num | (1 << bit)
     await writeTag(parentTag.value, numericTagValue(r.point, next), `已写入 ${displayTitle.value}`)
     return
@@ -367,6 +437,7 @@ let io: IntersectionObserver | null = null
 const tagsToWatch = computed<string[]>(() => {
   // 外部组件自己通过 host.slots 订阅，这里不重复订阅。
   if (external.value || externalMissing.value) return []
+  if (kind.value === 'core:readings') return readingTags.value
   if (kind.value === 'core:bits') {
     const r = resolved.value
     if (!r || r.bit) return []
@@ -403,6 +474,7 @@ onBeforeUnmount(() => {
   io = null
   dispose?.()
   dispose = null
+  if (flashTimer) clearTimeout(flashTimer)
 })
 </script>
 
@@ -412,12 +484,12 @@ onBeforeUnmount(() => {
     class="dev-widget"
     :class="[
       `kind-${kind.replace(':', '-')}`,
-      { unbound: !tag && !external && !externalMissing, external: Boolean(external) },
+      { unbound, external: Boolean(external) },
     ]"
   >
     <header class="dev-widget-head">
       <span class="dev-widget-title" :title="displayTitle">{{ displayTitle }}</span>
-      <span class="dev-widget-meta" :title="metaText">{{ metaText }}</span>
+      <span v-if="metaText" class="dev-widget-meta" :title="metaText">{{ metaText }}</span>
     </header>
 
     <ExternalWidgetMount
@@ -433,15 +505,53 @@ onBeforeUnmount(() => {
       <span>未知组件 <code>{{ component.kind }}</code>（来源未安装或已移除）</span>
     </div>
 
-    <div v-else-if="!tag && kind !== 'core:group'" class="dev-widget-empty">
+    <div v-else-if="unbound" class="dev-widget-empty">
       <AppIcon name="alert" :size="15" />
       <span>未绑定数据点</span>
+    </div>
+
+    <div v-else-if="kind === 'core:text'" class="widget-message" :class="{ emphasized: config.tone === 'accent' }">
+      {{ cfgString('text', '') }}
+    </div>
+
+    <div v-else-if="kind === 'core:readings'" class="widget-readings">
+      <div v-for="reading in readings" :key="reading.tag" class="reading-row">
+        <span class="reading-title" :title="reading.tag">{{ reading.title }}</span>
+        <span class="reading-value mono">{{ reading.value }}<small v-if="reading.unit"> {{ reading.unit }}</small></span>
+        <QualityPill :quality="reading.quality" compact />
+      </div>
+    </div>
+
+    <div v-else-if="kind === 'core:indicator'" class="dev-widget-body">
+      <div class="indicator-content">
+        <span class="indicator-lamp" :class="{ lit: indicatorOn === true, unknown: indicatorOn === undefined }">
+          <AppIcon name="lamp" :size="21" />
+        </span>
+        <strong>{{ indicatorText }}</strong>
+      </div>
+      <div class="value-foot"><QualityPill :quality="connection.connected ? quality : undefined" /></div>
+    </div>
+
+    <div v-else-if="kind === 'core:threshold'" class="dev-widget-body">
+      <div class="threshold-readout" :class="thresholdState.tone">
+        <span class="trend-number mono">{{ connection.connected && quality === 'good' ? displayValue : '—' }}</span>
+        <span v-if="unit" class="value-unit">{{ unit }}</span>
+        <span class="state-pill" :class="thresholdState.tone">{{ thresholdState.text }}</span>
+      </div>
+      <div class="range-scale mono">
+        <span>下限 {{ formatNumber(min, decimals) }}</span>
+        <span>上限 {{ formatNumber(max, decimals) }}</span>
+      </div>
+    </div>
+
+    <div v-else-if="kind === 'core:stats'" class="dev-widget-body">
+      <LiveStatistics :change="change" :connected="connection.connected" :decimals="decimals" :unit="unit" />
     </div>
 
     <template v-else-if="kind === 'core:value'">
       <div class="dev-widget-body">
         <div class="value-main">
-          <span class="value-number" :class="qualityClass(quality)">{{ displayValue }}</span>
+          <span class="value-number mono" :class="[qualityClass(quality), { flash: flashing }]">{{ displayValue }}</span>
           <span v-if="unit" class="value-unit">{{ unit }}</span>
         </div>
         <div class="value-foot">
@@ -463,9 +573,17 @@ onBeforeUnmount(() => {
               pathLength="100"
               :stroke-dasharray="`${gaugePct} 100`"
             />
+            <circle
+              v-if="change"
+              class="gauge-tip"
+              :class="qualityClass(quality)"
+              :cx="gaugeTipPos.x"
+              :cy="gaugeTipPos.y"
+              r="4.5"
+            />
           </svg>
           <div class="gauge-readout">
-            <span class="gauge-value" :class="qualityClass(quality)">{{ displayValue }}</span>
+            <span class="gauge-value mono" :class="[qualityClass(quality), { flash: flashing }]">{{ displayValue }}</span>
             <span v-if="unit" class="gauge-unit">{{ unit }}</span>
           </div>
           <div class="gauge-range">
@@ -479,13 +597,46 @@ onBeforeUnmount(() => {
       </div>
     </template>
 
+    <template v-else-if="kind === 'core:trend'">
+      <div class="dev-widget-body">
+        <div class="value-main">
+          <span class="trend-number mono">{{ connection.connected && quality === 'good' ? displayValue : '—' }}</span>
+          <span v-if="unit" class="value-unit">{{ unit }}</span>
+        </div>
+        <LiveTrend :key="tag" :change="change" :connected="connection.connected" :decimals="decimals" />
+        <div class="value-foot"><QualityPill compact :quality="connection.connected ? quality : undefined" /></div>
+      </div>
+    </template>
+
+    <template v-else-if="kind === 'core:level'">
+      <div class="dev-widget-body range-widget">
+        <div class="value-main">
+          <span class="trend-number mono">{{ levelReady ? displayValue : '—' }}</span>
+          <span v-if="unit" class="value-unit">{{ unit }}</span>
+        </div>
+        <div class="range-track" :class="{ inactive: !levelReady }">
+          <meter v-if="levelReady" :aria-label="displayTitle" min="0" max="100" :value="gaugePct" />
+        </div>
+        <div class="range-scale mono">
+          <span>{{ formatNumber(min, decimals) }}</span>
+          <span>{{ formatNumber(max, decimals) }}</span>
+        </div>
+        <div class="value-foot">
+          <QualityPill compact :quality="connection.connected ? quality : undefined" />
+          <span v-if="max <= min" class="text-warn small">量程上限需大于下限</span>
+          <span v-else-if="levelReady" class="muted small">{{ formatNumber(gaugePct, 1) }}% 量程</span>
+          <span v-else class="muted small">{{ connection.connected ? '等待有效数值' : '等待网关连接' }}</span>
+        </div>
+      </div>
+    </template>
+
     <template v-else-if="kind === 'core:switch'">
       <div class="dev-widget-body">
         <div class="switch-main">
           <button
             type="button"
             class="switch-toggle"
-            :class="{ on: switchOn, readonly: !writable }"
+            :class="{ on: switchOn, readonly: !writable, writing }"
             :disabled="!writable || writing"
             :title="writable ? '点击切换并写入' : '只读点或父点不可写'"
             @click="toggleSwitch"
@@ -494,7 +645,9 @@ onBeforeUnmount(() => {
           </button>
           <div class="switch-labels">
             <strong>{{ switchOn ? switchOnLabel : switchOffLabel }}</strong>
-            <span class="muted small">{{ writable ? '可写点' : '只读' }}</span>
+            <span class="muted small">
+              {{ writing ? '写入中…' : writable ? '可写点' : '只读' }}
+            </span>
           </div>
         </div>
         <div class="value-foot">

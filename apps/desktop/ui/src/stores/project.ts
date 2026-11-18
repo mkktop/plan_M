@@ -1,6 +1,7 @@
 import { computed, reactive, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { gateway } from '@/api/ws'
+import { pointCount } from '@/utils/devicePoints'
 import type {
   ChannelConfig,
   ChannelDto,
@@ -29,7 +30,11 @@ export const useProjectStore = defineStore('project', () => {
   const drivers = ref<DriverInfoDto[]>([])
   const targets = reactive<Partial<Record<TransportKind, TransportTarget[]>>>({})
   const loaded = ref(false)
+  const snapshotSession = ref(0)
   const refreshing = ref(false)
+  const live = computed(() =>
+    loaded.value && gateway.state.status === 'connected' && snapshotSession.value === gateway.state.session,
+  )
 
   const packageById = computed(() => {
     const m = new Map<string, PackageDto>()
@@ -38,11 +43,11 @@ export const useProjectStore = defineStore('project', () => {
   })
 
   const onlineDeviceCount = computed(() => devices.value.filter((d) => d.online).length)
+  const pointsByPackage = computed(() =>
+    new Map(packages.value.map((pkg) => [pkg.id, pointCount(pkg.points)])),
+  )
   const totalPointCount = computed(() =>
-    packages.value.reduce(
-      (n, p) => n + p.points.reduce((m, pt) => m + 1 + pt.bits.length, 0),
-      0,
-    ),
+    devices.value.reduce((count, device) => count + (pointsByPackage.value.get(device.package) ?? 0), 0),
   )
 
   function applyWelcome(msg: {
@@ -65,6 +70,7 @@ export const useProjectStore = defineStore('project', () => {
       if (!s.channels.some((c) => c.id === id)) delete channelStates[id]
     }
     loaded.value = true
+    snapshotSession.value = gateway.state.session
   }
 
   function applyPackages(list: PackageDto[]): void {
@@ -144,13 +150,14 @@ export const useProjectStore = defineStore('project', () => {
     channel: string,
     range: ScanRange,
     driver?: string | null,
+    packageId?: string | null,
   ): Promise<DeviceAddress[]> {
     // 扫描是串行探测，最坏情况几十秒（247 × 超时 × 重试），超时放宽。
     const r = await gateway.request<{
       type: 'scanDone'
       channel: string
       found: DeviceAddress[]
-    }>({ type: 'scanChannel', channel, driver: driver ?? null, range }, ['scanDone', 'error'], 180_000)
+    }>({ type: 'scanChannel', channel, driver: driver ?? null, package: packageId ?? null, range }, ['scanDone', 'error'], 180_000)
     return r.found
   }
 
@@ -174,6 +181,17 @@ export const useProjectStore = defineStore('project', () => {
     await command({ type: 'importPackage', path })
   }
 
+  async function packageVersions(id: string): Promise<string[]> {
+    const response = await gateway.request<{ type: 'packageVersions'; id: string; versions: string[] }>(
+      { type: 'getPackageVersions', id }, ['packageVersions', 'error'],
+    )
+    return response.versions
+  }
+
+  async function activatePackageVersion(id: string, version: string): Promise<void> {
+    await command({ type: 'activatePackageVersion', id, version })
+  }
+
   async function removePackage(id: string): Promise<void> {
     await command({ type: 'removePackage', id })
   }
@@ -188,6 +206,7 @@ export const useProjectStore = defineStore('project', () => {
     drivers,
     targets,
     loaded,
+    live,
     refreshing,
     packageById,
     onlineDeviceCount,
@@ -212,6 +231,8 @@ export const useProjectStore = defineStore('project', () => {
     addDevice,
     removeDevice,
     importPackage,
+    packageVersions,
+    activatePackageVersion,
     removePackage,
   }
 })

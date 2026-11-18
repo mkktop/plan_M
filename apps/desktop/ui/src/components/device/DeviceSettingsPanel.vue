@@ -144,7 +144,7 @@ async function save(): Promise<void> {
             v-model:value="form.overridesText"
             type="textarea"
             :autosize="{ minRows: 4, maxRows: 10 }"
-            placeholder='{ "uab": { "scale": 0.01 } }'
+            placeholder='{ "points.uab.scale": 0.01 }'
           />
           <p class="hint">
             用于按点覆盖 scale / offset / pollGroup 等；具体字段由编译器和设备包点表解释。
@@ -163,7 +163,7 @@ async function save(): Promise<void> {
         </div>
         <div class="kv">
           <dt>在线状态</dt>
-          <dd>{{ device.online ? '在线' : '离线' }}</dd>
+          <dd>{{ project.live ? (device.online ? '在线' : '离线') : '状态待确认' }}</dd>
         </div>
         <div class="kv">
           <dt>驱动</dt>

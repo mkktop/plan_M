@@ -8,10 +8,19 @@ import { gateway, isTauriRuntime } from '@/api/ws'
 import { useConnectionStore } from '@/stores/connection'
 import { useToastStore } from '@/stores/toast'
 import { useUpdatesStore } from '@/stores/updates'
+import { setThemeMode, themeMode, type ThemeMode } from '@/utils/theme'
 
 const conn = useConnectionStore()
 const toast = useToastStore()
 const updates = useUpdatesStore()
+
+// —— 外观（主题）——
+
+const THEME_OPTIONS: { value: ThemeMode; label: string; desc: string }[] = [
+  { value: 'dark', label: '深色', desc: '低亮度界面' },
+  { value: 'light', label: '浅色', desc: '明亮背景' },
+  { value: 'system', label: '跟随系统', desc: '依据 Windows 深浅色' },
+]
 
 // 模板里统一走这层别名（Volar 对 class 实例上的 reactive 字段做 ref 解包时类型会跑偏）。
 const gs = gateway.state
@@ -166,12 +175,13 @@ onMounted(() => {
 
 <template>
   <div class="page settings-page">
-    <PageHeader title="设置" subtitle="连接参数与应用更新" />
+    <PageHeader title="设置" subtitle="管理网关连接、界面外观和应用维护" />
 
+    <div class="settings-grid">
     <section class="card settings-card">
       <div class="card-head">
-        <h3>连接</h3>
-        <span class="muted small">gatewayd 采集服务的 WebSocket 地址与访问 token</span>
+        <span class="settings-icon"><AppIcon name="link" :size="18" /></span>
+        <div><h3>网关连接</h3><p>WebSocket 地址与访问令牌</p></div>
       </div>
 
       <div class="settings-form">
@@ -239,8 +249,32 @@ onMounted(() => {
 
     <section class="card settings-card">
       <div class="card-head">
-        <h3>数据目录</h3>
-        <span class="muted small">通道 / 设备 / 仪表盘 / 设备包 / 插件存放的位置</span>
+        <span class="settings-icon"><AppIcon name="sun" :size="18" /></span>
+        <div><h3>界面外观</h3><p>选择工作台的显示主题</p></div>
+      </div>
+      <div class="theme-options">
+        <button
+          v-for="opt in THEME_OPTIONS"
+          :key="opt.value"
+          type="button"
+          class="theme-option"
+          :class="{ active: themeMode === opt.value }"
+          :aria-pressed="themeMode === opt.value"
+          @click="setThemeMode(opt.value)"
+        >
+          <span class="theme-swatch" :class="opt.value" />
+          <span class="theme-option-text">
+            <strong>{{ opt.label }}</strong>
+            <small>{{ opt.desc }}</small>
+          </span>
+        </button>
+      </div>
+    </section>
+
+    <section class="card settings-card">
+      <div class="card-head">
+        <span class="settings-icon"><AppIcon name="folder" :size="18" /></span>
+        <div><h3>数据目录</h3><p>管理工作台数据的存储位置</p></div>
       </div>
 
       <template v-if="isDesktop">
@@ -284,8 +318,8 @@ onMounted(() => {
 
     <section class="card settings-card">
       <div class="card-head">
-        <h3>应用与更新</h3>
-        <span class="muted small">从 GitHub Releases 检查，下载安装包并自动校验摘要</span>
+        <span class="settings-icon"><AppIcon name="download" :size="18" /></span>
+        <div><h3>应用与更新</h3><p>查看版本并检查更新</p></div>
       </div>
 
       <div class="update-hero">
@@ -378,6 +412,8 @@ onMounted(() => {
         </p>
       </div>
     </section>
+
+    </div>
 
     <ModalShell
       v-if="migrateConfirmOpen"

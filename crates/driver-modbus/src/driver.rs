@@ -207,6 +207,14 @@ impl Driver for ModbusDriver {
         ]
     }
 
+    fn point_address_format(&self) -> &'static str {
+        "register"
+    }
+
+    fn scan_bounds(&self) -> Option<hmi_domain::protocol::ScanRange> {
+        Some(hmi_domain::protocol::ScanRange { from: 1, to: 247 })
+    }
+
     fn validate_address(&self, address: &DeviceAddress) -> Result<(), String> {
         let n = address
             .as_number()
@@ -461,7 +469,6 @@ mod tests {
         driver
             .compile(&CompileInput {
                 device_id: "dev1",
-                overrides: &Default::default(),
                 points: &points,
                 protocol: d,
             })

@@ -285,7 +285,7 @@ const tagOptions = computed(() => {
 // —— 组件渲染辅助 ——
 
 function tagChange(tag: string) {
-  return tagStore.get(tag)
+  return tagStore.getLive(tag)
 }
 
 function cfgNumber(w: WidgetDto, key: string, fallback: number): number {

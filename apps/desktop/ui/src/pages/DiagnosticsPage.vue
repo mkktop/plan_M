@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { NButton } from 'naive-ui'
 import PageHeader from '@/components/PageHeader.vue'
 import AppIcon from '@/components/AppIcon.vue'
+import MetricCard from '@/components/MetricCard.vue'
 import TagsPage from '@/pages/TagsPage.vue'
 import { gateway } from '@/api/ws'
 import { useConnectionStore } from '@/stores/connection'
@@ -56,15 +57,11 @@ const healthUrl = computed(() => {
 })
 
 const stats = computed(() => [
-  { label: '通道', value: String(project.channels.length), hint: '串口总线' },
-  {
-    label: '设备在线',
-    value: `${project.onlineDeviceCount}/${project.devices.length}`,
-    hint: '当前轮询正常',
-  },
-  { label: '设备包', value: String(project.packages.length), hint: '已安装' },
-  { label: '实时 tag', value: String(tags.values.size), hint: '本地缓存' },
-])
+  { label: '连接时长', value: conn.connected ? uptimeText.value : '—', icon: 'clock', tone: 'green' },
+  { label: 'HTTP 响应', value: health.value.state === 'ok' ? `${health.value.latency} ms` : '—', icon: 'activity', tone: 'blue' },
+  { label: '重连尝试', value: gs.attempts, icon: 'refresh', tone: 'amber' },
+  { label: '缓存点位', value: tags.values.size, icon: 'grid', tone: 'violet' },
+] as const)
 
 const tokenMasked = computed(() => {
   const t = gs.settings.token
@@ -101,6 +98,19 @@ async function reconnect(): Promise<void> {
   toast.info('正在重新连接 gatewayd')
 }
 
+// —— 通信日志筛选 ——
+const logFilter = ref<'all' | 'in' | 'out' | 'sys'>('all')
+const LOG_FILTERS = [
+  { label: '全部', value: 'all' },
+  { label: '下发 →', value: 'out' },
+  { label: '← 上行', value: 'in' },
+  { label: '系统', value: 'sys' },
+] as const
+
+const visibleLogs = computed(() =>
+  logFilter.value === 'all' ? gs.logs : gs.logs.filter((l) => l.dir === logFilter.value),
+)
+
 function disconnect(): void {
   conn.disconnect()
   toast.info('已断开连接（gatewayd 仍在后台采集）')
@@ -119,7 +129,7 @@ watch(
 </script>
 
 <template>
-  <div class="page">
+  <div class="page diagnostics-page">
     <PageHeader title="诊断" subtitle="连接与链路健康、通信日志，以及跨设备实时数据浏览">
       <n-button size="small" @click="router.push('/settings')">
         <template #icon><AppIcon name="settings" :size="15" /></template>
@@ -140,6 +150,7 @@ watch(
         :aria-selected="tab === 'health'"
         @click="setTab('health')"
       >
+        <AppIcon name="activity" :size="15" />
         连接与健康
       </button>
       <button
@@ -150,12 +161,16 @@ watch(
         :aria-selected="tab === 'data'"
         @click="setTab('data')"
       >
-        数据浏览
+        <AppIcon name="grid" :size="15" />
+        跨设备数据浏览
       </button>
     </div>
 
     <template v-if="tab === 'health'">
-    <div class="grid-2">
+    <div class="metric-grid">
+      <MetricCard v-for="stat in stats" :key="stat.label" v-bind="stat" />
+    </div>
+    <div class="grid-2 diagnostics-grid">
       <section class="card conn-card">
         <div class="conn-hero">
           <span class="status-orb" :class="conn.state.status" />
@@ -206,17 +221,10 @@ watch(
         </div>
       </section>
 
-      <section class="card">
+      <section class="card health-card">
         <div class="card-head">
-          <h3>运行统计</h3>
-          <span class="muted">来自最近一次快照</span>
-        </div>
-        <div class="stat-grid">
-          <div v-for="s in stats" :key="s.label" class="stat">
-            <div class="stat-label">{{ s.label }}</div>
-            <div class="stat-value mono">{{ s.value }}</div>
-            <div class="stat-hint">{{ s.hint }}</div>
-          </div>
+          <div><h3>网关健康检查</h3><p class="muted small">检测网关的 HTTP 响应</p></div>
+          <span v-if="health.checkedAt" class="mono muted small">{{ formatClock(health.checkedAt) }}</span>
         </div>
 
         <div class="health-row">
@@ -240,9 +248,14 @@ watch(
             <template v-else>
               <span class="muted">未检测</span>
             </template>
-            <n-button size="tiny" quaternary @click="checkHealth">检测</n-button>
+            <n-button size="small" :loading="health.state === 'checking'" @click="checkHealth">检测</n-button>
           </div>
         </div>
+        <dl class="kv-list">
+          <div class="kv"><dt>网关版本</dt><dd class="mono">{{ health.version || '—' }}</dd></div>
+          <div class="kv"><dt>已配置设备</dt><dd class="mono">{{ project.loaded ? project.devices.length : '—' }}</dd></div>
+          <div class="kv"><dt>已配置通道</dt><dd class="mono">{{ project.loaded ? project.channels.length : '—' }}</dd></div>
+        </dl>
       </section>
     </div>
 
@@ -250,17 +263,29 @@ watch(
       <div class="card-head">
         <h3>通信日志</h3>
         <div class="row gap-8">
-          <span class="muted small">{{ gs.logs.length }} 条 · 仅保留最近 300 条</span>
+          <div class="filter-chips">
+            <button
+              v-for="f in LOG_FILTERS"
+              :key="f.value"
+              type="button"
+              class="filter-chip"
+              :class="{ active: logFilter === f.value }"
+              @click="logFilter = f.value"
+            >
+              {{ f.label }}
+            </button>
+          </div>
+          <span class="muted small">{{ visibleLogs.length }}/{{ gs.logs.length }} 条 · 保留最近 300 条</span>
           <n-button size="tiny" quaternary @click="gateway.clearLogs()">清空</n-button>
         </div>
       </div>
       <div class="log-list">
-        <div v-for="l in gs.logs" :key="l.id" class="log-row" :class="l.dir">
+        <div v-for="l in visibleLogs" :key="l.id" class="log-row" :class="l.dir">
           <span class="log-time mono">{{ formatClock(l.ts) }}</span>
           <span class="log-dir">{{ l.dir === 'in' ? '←' : l.dir === 'out' ? '→' : '·' }}</span>
           <span class="log-text mono">{{ l.text }}</span>
         </div>
-        <div v-if="gs.logs.length === 0" class="log-empty muted">暂无消息</div>
+        <div v-if="visibleLogs.length === 0" class="log-empty muted">暂无消息</div>
       </div>
     </section>
     </template>

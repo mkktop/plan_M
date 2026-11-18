@@ -1,17 +1,16 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NButton } from 'naive-ui'
+import { NButton, NDropdown } from 'naive-ui'
 import AppIcon from '@/components/AppIcon.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import DevicePagesEditor from '@/components/DevicePagesEditor.vue'
-import DevicePageBlock from '@/components/device/DevicePageBlock.vue'
-import DeviceWidgetCard from '@/components/device/DeviceWidgetCard.vue'
+import WorkspaceCanvas from '@/components/device/WorkspaceCanvas.vue'
 import { useConnectionStore } from '@/stores/connection'
 import { useProjectStore } from '@/stores/project'
 import { useWorkspacesStore } from '@/stores/workspaces'
-import { isCompactWidgetKind, pageUsesGrid, pagesForPackage } from '@/utils/devicePages'
-import type { DevicePageComponentDto } from '@/api/types'
+import { normalizeComponentKind, pagesForPackage } from '@/utils/devicePages'
+import { instanceWorkspaceKey } from '@/utils/systemPages'
 import { addressLabel } from '@/utils/transport'
 
 const route = useRoute()
@@ -29,9 +28,11 @@ const channelName = computed(
 )
 
 const typeId = computed(() => pkg.value?.id ?? '')
-const saved = computed(() => workspaces.get(typeId.value))
-const overridden = computed(() => Boolean(saved.value))
-const pages = computed(() => pagesForPackage(pkg.value, saved.value))
+const modelLayout = computed(() => workspaces.get(typeId.value))
+const instanceKey = computed(() => instanceWorkspaceKey(deviceId.value))
+const instanceLayout = computed(() => workspaces.get(instanceKey.value))
+const modelPages = computed(() => pagesForPackage(pkg.value, modelLayout.value))
+const pages = computed(() => pagesForPackage(pkg.value, instanceLayout.value ?? modelLayout.value))
 
 const requestedPageId = computed(() =>
   typeof route.params.pageId === 'string' ? route.params.pageId : '',
@@ -39,46 +40,13 @@ const requestedPageId = computed(() =>
 const activePage = computed(
   () => pages.value.find((p) => p.id === requestedPageId.value) ?? pages.value[0] ?? null,
 )
-
-/** 连续的小组件合并成一行自适应网格；其余组件仍按整块纵向排列。 */
-type PageBlock =
-  | { type: 'widgets'; items: { comp: DevicePageComponentDto; index: number }[] }
-  | { type: 'block'; comp: DevicePageComponentDto; index: number }
-
-const pageBlocks = computed<PageBlock[]>(() => {
-  const blocks: PageBlock[] = []
-  activePage.value?.components.forEach((comp, index) => {
-    if (isCompactWidgetKind(comp.kind)) {
-      const last = blocks[blocks.length - 1]
-      if (last?.type === 'widgets') last.items.push({ comp, index })
-      else blocks.push({ type: 'widgets', items: [{ comp, index }] })
-    } else {
-      blocks.push({ type: 'block', comp, index })
-    }
-  })
-  return blocks
-})
-
-/** 页面组件声明了 rect → 12 列绝对网格；否则走流式排列。 */
-const gridMode = computed(() => {
-  const page = activePage.value
-  return !!page && pageUsesGrid(page.components)
-})
-
-function rectStyle(comp: DevicePageComponentDto): Record<string, string> {
-  const r = comp.rect
-  if (!r) return {}
-  return {
-    '--wx': String(r.x),
-    '--wy': String(r.y),
-    '--ww': String(r.w),
-    '--wh': String(r.h),
-  }
-}
+const pointTablePage = computed(() => pages.value.find((page) =>
+  page.components.some((component) => normalizeComponentKind(component.kind) === 'core:tags'),
+))
 
 // 已删除的页面 id → 规范到第一页，左侧导航才能正确高亮。
 watch(
-  () => [requestedPageId.value, pages.value.map((p) => p.id).join(',')] as const,
+  () => [deviceId.value, workspaces.loaded, requestedPageId.value, pages.value.map((p) => p.id).join(',')] as const,
   () => {
     if (!workspaces.loaded) return
     if (!activePage.value) return
@@ -90,14 +58,18 @@ watch(
   { immediate: true },
 )
 
-function addDevice(): void {
-  void router.push({
-    path: '/devices',
-    query: { add: '1', package: typeId.value },
-  })
+const editorScope = ref<'device' | 'model' | null>(null)
+const editingInstance = computed(() => editorScope.value === 'device')
+const editChoices = [
+  { key: 'device', label: '仅编辑当前设备' },
+  { key: 'model', label: '编辑同型号共享布局' },
+]
+
+function editLayout(key: string): void {
+  editorScope.value = key === 'model' ? 'model' : 'device'
 }
 
-const editorOpen = ref(false)
+watch(deviceId, () => { editorScope.value = null })
 
 onMounted(() => {
   if (conn.connected) void workspaces.load()
@@ -110,31 +82,37 @@ onMounted(() => {
       <div class="ws-identity">
         <span class="ws-glyph"><AppIcon name="chip" :size="22" /></span>
         <div class="ws-identity-main">
-          <span class="ws-kicker">设备实例</span>
           <h2>{{ device.name || device.id }}</h2>
           <div class="ws-meta">
             <span class="mono">{{ device.id }}</span>
             <span>{{ addressLabel(device.address) }}</span>
             <span v-if="channelName">{{ channelName }}</span>
             <span class="ws-meta-sep" />
-            <span class="online-dot" :class="{ on: device.online }" />
-            <span>{{ device.online ? '在线' : '离线' }}</span>
+            <span class="state-pill" :class="project.live && device.online ? 'ok' : 'idle'">
+              {{ project.live ? (device.online ? '在线' : '离线') : '状态待确认' }}
+            </span>
             <span class="ws-meta-sep" />
-            <span class="mono">{{ pkg.id }}</span>
-            <span>v{{ pkg.version }}</span>
+            <span>{{ pkg.name }} · v{{ pkg.version }}</span>
           </div>
         </div>
       </div>
 
       <div class="ws-actions">
-        <n-button size="small" @click="addDevice">
-          <template #icon><AppIcon name="plus" :size="14" /></template>
-          添加设备
+        <n-button
+          v-if="!pointTablePage || pointTablePage.id !== activePage?.id"
+          size="small"
+          @click="router.push(pointTablePage ? `/d/${deviceId}/${pointTablePage.id}` :
+            { path: '/diagnostics', query: { tab: 'data', device: deviceId } })"
+        >
+          <template #icon><AppIcon name="activity" :size="14" /></template>
+          {{ pointTablePage ? '实时点表' : '跨设备数据浏览' }}
         </n-button>
-        <n-button size="small" @click="editorOpen = true">
-          <template #icon><AppIcon name="settings" :size="14" /></template>
-          编辑页面
-        </n-button>
+        <n-dropdown trigger="click" :options="editChoices" @select="editLayout">
+          <n-button size="small" :disabled="!conn.connected">
+            <template #icon><AppIcon name="edit" :size="14" /></template>
+            编辑页面
+          </n-button>
+        </n-dropdown>
       </div>
     </section>
 
@@ -162,62 +140,26 @@ onMounted(() => {
           <div>
             <h3>{{ activePage.title }}</h3>
             <p class="muted small">
-              {{ pkg.name }} 的页面 · 按设备类型共享
-              <span v-if="overridden"> · 自定义页面</span>
+              {{ instanceLayout ? '当前设备布局' : modelLayout ? '同型号共享布局' : '设备包默认布局' }}
             </p>
           </div>
-          <span class="muted small mono">{{ pkg.id }}</span>
         </header>
 
-        <!-- 12 列网格：组件按 rect 绝对定位，窄屏自动单列 -->
-        <div v-if="gridMode" class="ws-widget-canvas">
-          <div
-            v-for="(comp, index) in activePage.components"
-            :key="`${activePage.id}-g-${index}`"
-            class="ws-canvas-item"
-            :style="rectStyle(comp)"
-          >
-            <DeviceWidgetCard
-              v-if="isCompactWidgetKind(comp.kind)"
-              :device-id="deviceId"
-              :component="comp"
-            />
-            <div v-else class="ws-canvas-block">
-              <div v-if="comp.title" class="ws-component-head">{{ comp.title }}</div>
-              <DevicePageBlock :device-id="deviceId" :component="comp" />
-            </div>
-          </div>
-        </div>
-
-        <!-- 流式：连续小组件合并为自适应网格，整块组件纵向排列 -->
-        <template v-else>
-          <template v-for="(block, bi) in pageBlocks" :key="`${activePage.id}-${bi}`">
-            <div v-if="block.type === 'widgets'" class="ws-widget-grid">
-              <DeviceWidgetCard
-                v-for="item in block.items"
-                :key="`${activePage.id}-${item.index}`"
-                :device-id="deviceId"
-                :component="item.comp"
-              />
-            </div>
-
-            <div v-else class="ws-component">
-              <div v-if="block.comp.title" class="ws-component-head">{{ block.comp.title }}</div>
-              <DevicePageBlock :device-id="deviceId" :component="block.comp" />
-            </div>
-          </template>
-        </template>
+        <WorkspaceCanvas :key="activePage.id" :device-id="deviceId" :components="activePage.components" />
       </section>
     </template>
 
     <DevicePagesEditor
-      v-if="editorOpen && pkg"
+      v-if="editorScope && pkg"
       :type-id="typeId"
-      :package-name="pkg.name"
-      :pages="pages"
-      :overridden="overridden"
-      @close="editorOpen = false"
-      @saved="editorOpen = false"
+      :package-name="editingInstance ? (device?.name || deviceId) : pkg.name"
+      :workspace-key="editingInstance ? instanceKey : typeId"
+      :scope-label="editingInstance ? '当前设备' : '同型号设备'"
+      :inherited-label="editingInstance && modelLayout ? '同型号共享布局' : '包默认布局'"
+      :pages="editingInstance ? pages : modelPages"
+      :overridden="Boolean(editingInstance ? instanceLayout : modelLayout)"
+      :initial-page-id="activePage?.id"
+      @close="editorScope = null"
     />
   </div>
 </template>

@@ -116,6 +116,7 @@ pub struct PointDef {
     #[serde(default)]
     pub name: String,
     /// 协议地址
+    #[serde(alias = "register")]
     pub address: PointAddress,
     /// 数据类型；位区域/非数值协议可忽略
     #[serde(rename = "type", alias = "dataType", default)]

@@ -21,7 +21,10 @@ pub const HOST_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// 宿主注册的驱动。新增协议在这里加一行。
 pub fn drivers() -> Vec<Arc<dyn Driver>> {
-    vec![Arc::new(hmi_driver_modbus::ModbusDriver::new())]
+    vec![
+        Arc::new(hmi_driver_modbus::ModbusDriver::new()),
+        Arc::new(hmi_driver_frame::FrameDriver),
+    ]
 }
 
 /// 宿主注册的传输。新增传输在这里加一行。
