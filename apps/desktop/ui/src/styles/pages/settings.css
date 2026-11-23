@@ -57,34 +57,32 @@
 }
 
 .theme-swatch {
-  --preview-rail: #dde8ff;
-  --preview-content: #edf0fe;
-  --preview-card: #ffffff;
+  --preview-content: #f2f5f8;
+  --preview-card: #fff;
   position: relative;
   display: block;
   height: 54px;
   border-radius: var(--radius-xs);
   border: 1px solid var(--line);
-  background: linear-gradient(90deg, var(--preview-rail) 25%, transparent 25%), var(--preview-content);
+  background: linear-gradient(90deg, var(--rail-bg) 25%, transparent 25%), var(--preview-content);
   overflow: hidden;
 }
 
 .theme-swatch.dark {
-  --preview-rail: #2b3452;
-  --preview-content: #1a213b;
-  --preview-card: #383f62;
+  --preview-content: #101722;
+  --preview-card: #182230;
 }
 
 .theme-swatch.system {
-  --preview-content: linear-gradient(90deg, #1a213b 62.5%, #edf0fe 62.5%);
-  --preview-card: linear-gradient(90deg, #383f62 50%, #ffffff 50%);
+  --preview-content: linear-gradient(90deg, #101722 62.5%, #f2f5f8 62.5%);
+  --preview-card: linear-gradient(90deg, #182230 50%, #fff 50%);
 }
 
 .theme-swatch::after {
   content: '';
   position: absolute;
   inset: 32% 8% 18% 33%;
-  border: 1px solid rgb(90 142 118 / 0.25);
+  border: 1px solid var(--line-strong);
   border-radius: 4px;
   background: var(--preview-card);
 }
@@ -95,7 +93,7 @@
   inset: 14% 8% auto 33%;
   height: 4px;
   border-radius: 3px;
-  background: rgb(90 142 118 / 0.48);
+  background: var(--brand-bg);
 }
 
 .theme-option-text {

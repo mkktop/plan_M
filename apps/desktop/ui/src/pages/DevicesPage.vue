@@ -491,7 +491,9 @@ watch([() => project.live, () => route.query], ([live, q]) => {
               </div>
               <div>
                 <span class="label">状态</span>
-                <span :class="project.live && d.online ? 'text-good' : 'muted'">{{ project.live ? (d.online ? '在线' : '离线') : '待确认' }}</span>
+                <span class="state-pill" :class="!project.live ? 'idle' : d.online ? 'ok' : 'warn'">
+                  {{ project.live ? (d.online ? '在线' : '离线') : '待确认' }}
+                </span>
               </div>
             </div>
 

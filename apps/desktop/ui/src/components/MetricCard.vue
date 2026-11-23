@@ -14,9 +14,11 @@ defineProps<{
 
 <template>
   <component :is="to ? 'router-link' : 'div'" :to="to" class="metric-card" :class="tone">
-    <span class="metric-icon"><AppIcon :name="icon" :size="19" /></span>
-    <AppIcon v-if="to" class="metric-arrow" name="arrowUpRight" :size="15" />
-    <span class="metric-label">{{ label }}</span>
+    <span class="metric-head">
+      <span class="metric-icon"><AppIcon :name="icon" :size="18" /></span>
+      <span class="metric-label">{{ label }}</span>
+      <AppIcon v-if="to" class="metric-arrow" name="arrowUpRight" :size="15" />
+    </span>
     <strong class="metric-value">
       {{ value }}<small v-if="total !== undefined"> / {{ total }}</small>
     </strong>

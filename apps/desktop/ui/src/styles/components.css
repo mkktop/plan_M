@@ -6,11 +6,12 @@
 /* —— 页面骨架与页头 —— */
 
 .page {
+  width: 100%;
   max-width: 1460px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 22px;
 }
 
 .page-head {
@@ -21,15 +22,14 @@
   flex-wrap: wrap;
 }
 
-.page-head h2 {
-  font-size: clamp(25px, 2.5vw, 33px);
-  font-weight: 720;
+.page-head h1 {
+  font-size: clamp(26px, 2.5vw, 34px);
+  font-weight: 700;
   line-height: 1.22;
-  letter-spacing: -0.04em;
 }
 
 .page-head p {
-  margin-top: 6px;
+  margin-top: 8px;
   font-size: 13px;
 }
 
@@ -44,21 +44,20 @@
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  min-height: 35px;
+  min-height: 38px;
   padding: 0 12px;
-  border-radius: 18px;
+  border-radius: var(--radius-xs);
   font-weight: 600;
   text-decoration: none;
 }
 
 .action-link.primary {
   padding-inline: 14px;
-  border: 1px solid rgb(255 255 255 / 0.32);
-  background: linear-gradient(160deg, var(--accent-hover), var(--accent-active));
+  background: var(--accent);
   color: var(--on-accent);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.35), 0 4px 10px var(--accent-line);
 }
 .action-link.primary:hover { background: var(--accent-hover); }
+.action-link.primary:active { background: var(--accent-active); }
 
 .metric-grid {
   display: grid;
@@ -70,44 +69,40 @@
   --metric-ink: var(--accent-strong);
   --metric-bg: var(--accent-soft);
   display: grid;
-  position: relative;
-  justify-items: start;
   align-content: start;
-  gap: 4px;
+  gap: 8px;
   min-width: 0;
-  padding: 15px 17px;
-  border: 1px solid var(--glass-edge);
+  padding: 16px 18px;
+  border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--card-bg);
-  box-shadow: var(--glass-shadow);
-  backdrop-filter: blur(16px) saturate(140%);
+  box-shadow: var(--shadow-3);
   color: var(--text-1);
   text-decoration: none;
   transition: border-color var(--dur-1), box-shadow var(--dur-1);
 }
 
-.metric-card.blue { --metric-ink: #2c6398; --metric-bg: #e7f1fb; }
-.metric-card.amber { --metric-ink: #8b5218; --metric-bg: #f9efdd; }
-.metric-card.violet { --metric-ink: #64519d; --metric-bg: #eeeafa; }
-[data-theme='dark'] .metric-card.blue { --metric-ink: #aad3fa; --metric-bg: #213b4f; }
-[data-theme='dark'] .metric-card.amber { --metric-ink: #f6d49f; --metric-bg: #473922; }
-[data-theme='dark'] .metric-card.violet { --metric-ink: #dcccfb; --metric-bg: #36304b; }
-a.metric-card:hover { border-color: var(--accent-line); box-shadow: var(--shadow-3); }
+.metric-card.green { --metric-ink: var(--good-strong); --metric-bg: var(--good-soft); }
+.metric-card.amber { --metric-ink: var(--warn-strong); --metric-bg: var(--warn-soft); }
+.metric-card.violet { --metric-ink: var(--uncertain); --metric-bg: rgb(var(--rgb-uncertain) / 0.1); }
+a.metric-card:hover { border-color: var(--accent-line); box-shadow: var(--shadow-2); }
+.metric-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .metric-icon {
   display: grid;
+  flex: none;
   place-items: center;
-  width: 35px;
-  height: 35px;
-  margin-bottom: 4px;
-  border-radius: 9px;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-sm);
   background: var(--metric-bg);
   color: var(--metric-ink);
 }
-.metric-arrow { position: absolute; top: 17px; right: 15px; color: var(--text-3); }
-.metric-label { color: var(--text-2); font-size: 12px; font-weight: 620; }
-.metric-value { font-size: 29px; font-weight: 700; letter-spacing: -0.04em; line-height: 1.13; font-variant-numeric: tabular-nums; }
+.metric-arrow { flex: none; margin-left: auto; color: var(--text-3); }
+a.metric-card:hover .metric-arrow { color: var(--accent-strong); }
+.metric-label { color: var(--text-2); font-size: 13px; font-weight: 600; }
+.metric-value { font-size: clamp(26px, 2.5vw, 34px); font-weight: 700; letter-spacing: -0.035em; line-height: 1.13; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .metric-value small { color: var(--text-3); font-size: 14px; font-weight: 550; letter-spacing: 0; }
-.metric-detail { color: var(--text-3); font-size: 11px; }
+.metric-detail { color: var(--text-3); font-size: 12px; }
 
 @media (max-width: 780px) {
   .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
@@ -179,7 +174,7 @@ kbd {
 
 .search-input {
   width: 100%;
-  height: 30px;
+  height: 34px;
   padding: 0 12px 0 30px;
   border: 1px solid var(--line);
   border-radius: var(--radius-xs);
@@ -213,14 +208,14 @@ kbd {
   gap: 4px;
   padding: 2px;
   border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--bg-1);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
 }
 
 .filter-chip {
   padding: 3px 12px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-xs);
   background: transparent;
   color: var(--text-3);
   font-size: 11px;
@@ -229,23 +224,24 @@ kbd {
   transition: color var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out);
 }
 
-.filter-chip:hover {
+.filter-chip:hover:not(:disabled) {
   color: var(--text-1);
 }
 
 .filter-chip.active {
-  color: var(--accent);
+  color: var(--accent-strong);
   background: var(--accent-soft);
 }
+
+.filter-chip:disabled { opacity: 0.65; cursor: not-allowed; }
 
 /* —— 卡片 —— */
 
 .card {
   background: var(--card-bg);
-  border: 1px solid var(--glass-edge);
+  border: 1px solid var(--line);
   border-radius: var(--radius);
-  box-shadow: var(--glass-shadow);
-  backdrop-filter: blur(18px) saturate(135%);
+  box-shadow: var(--shadow-3);
 }
 
 .card-head {
@@ -287,7 +283,7 @@ kbd {
 .online-dot.on,
 .state-dot.ok {
   background: var(--good);
-  box-shadow: 0 0 0 3px rgb(var(--rgb-good) / 0.14), 0 0 10px rgb(var(--rgb-good) / 0.45);
+  box-shadow: 0 0 0 3px rgb(var(--rgb-good) / 0.14);
 }
 
 .state-dot.warn {
@@ -406,20 +402,22 @@ kbd {
   align-items: center;
   gap: 8px;
   height: 30px;
-  padding: 0 12px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  background: var(--bg-2);
+  padding: 0 10px;
+  border-radius: var(--radius-xs);
+  border: 1px solid transparent;
+  background: transparent;
   color: var(--text-2);
   cursor: pointer;
   font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
   transition: border-color var(--dur-2) var(--ease-out), background var(--dur-2) var(--ease-out),
     color var(--dur-2) var(--ease-out);
 }
 
 .conn-pill:hover {
-  border-color: var(--line-strong);
-  background: var(--bg-3);
+  border-color: var(--line);
+  background: var(--bg-2);
 }
 
 .conn-pill .dot {
@@ -435,7 +433,7 @@ kbd {
 
 .conn-pill.connected .dot {
   background: var(--good);
-  box-shadow: 0 0 8px rgb(var(--rgb-good) / 0.65);
+  box-shadow: none;
 }
 
 .conn-pill.connecting .dot,
@@ -458,13 +456,6 @@ kbd {
 
 .conn-pill.error .dot {
   background: var(--bad);
-}
-
-.conn-ver {
-  color: var(--text-3);
-  font-size: 10.5px;
-  padding-left: 4px;
-  border-left: 1px solid var(--line);
 }
 
 /* —— LIVE 徽标 —— */
@@ -836,7 +827,6 @@ kbd {
   place-items: center;
   padding: 24px;
   background: var(--mask-bg);
-  backdrop-filter: blur(8px);
   animation: fade-in var(--dur-2) ease-out;
 }
 
@@ -845,11 +835,10 @@ kbd {
   flex-direction: column;
   max-width: 94vw;
   max-height: 90vh;
-  border: 1px solid var(--glass-edge);
+  border: 1px solid var(--line);
   border-radius: 26px;
   background: var(--modal-bg);
-  box-shadow: var(--shadow-1), inset 0 1px 0 var(--glass-glint);
-  backdrop-filter: blur(25px) saturate(150%);
+  box-shadow: var(--shadow-1);
   animation: modal-in 0.2s var(--ease-out);
   overflow: hidden;
 }

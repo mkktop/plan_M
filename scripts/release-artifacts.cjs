@@ -89,11 +89,11 @@ async function uploadInstallers({ github, context, core, tag, directory, platfor
     ;({ data: release } = await github.rest.repos.createRelease({
       ...context.repo,
       tag_name: tag,
-      name: `planM ${tag}`,
+      name: `M计划 ${tag}`,
       draft: true,
       prerelease: false,
       body: [
-        '上位机平台桌面版安装包（Windows x64）。',
+        'M计划桌面版安装包（Windows x64）。',
         '',
         '- 安装包内附带同版本 `gatewayd.exe` 采集服务（安装目录下，手动运行 `gatewayd serve --sim` 或真实串口配置；数据目录 `%APPDATA%/gatewayd`）。',
         '- 应用内「设置 → 检查更新」可自动完成后续升级。',

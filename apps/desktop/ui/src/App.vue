@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { dateZhCN, NConfigProvider, zhCN } from 'naive-ui'
+import appIcon from '../../app-icon.svg'
 import AppIcon from '@/components/AppIcon.vue'
 import CommandPalette from '@/components/CommandPalette.vue'
 import ConnectionPill from '@/components/ConnectionPill.vue'
@@ -205,14 +206,10 @@ onBeforeUnmount(() => {
       <!-- 自绘标题栏：窗口无系统边框，这一条就是窗口的标题栏（拖拽区 + 窗口按钮） -->
       <header class="titlebar" data-tauri-drag-region="deep">
         <div class="titlebar-brand">
-          <div class="brand-glyph">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M3 13h4l2.5-7 4 13 2-6h5.5" />
-            </svg>
-          </div>
+          <img class="brand-glyph" :src="appIcon" alt="" width="35" height="35" draggable="false" />
           <div class="brand-text">
-            <div class="brand-name">planM</div>
-            <div class="brand-sub">采集工作台</div>
+            <div class="brand-name">M计划</div>
+            <div class="brand-sub">通用工业上位机</div>
           </div>
         </div>
 
@@ -287,6 +284,7 @@ onBeforeUnmount(() => {
               class="nav-item"
               :class="{ active: route.path === item.path || (inDeviceWorkspace && item.path === `/d/${activeDeviceId}/${activePage?.id}`) }"
               :title="item.label"
+              :aria-label="item.label"
             >
               <AppIcon :name="item.icon" :size="18" />
               <span class="nav-text">{{ item.label }}</span>
@@ -298,7 +296,8 @@ onBeforeUnmount(() => {
           <button
             type="button"
             class="rail-system"
-            title="切换到系统菜单"
+            title="返回工作台"
+            aria-label="返回工作台"
             @click="router.push('/home')"
           >
             <AppIcon name="layout" :size="17" />

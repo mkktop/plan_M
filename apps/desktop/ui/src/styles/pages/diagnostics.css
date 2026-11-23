@@ -33,8 +33,7 @@
 
 .status-orb.connected {
   background: var(--good);
-  box-shadow: 0 0 0 4px rgb(var(--rgb-good) / 0.14), 0 0 18px rgb(var(--rgb-good) / 0.55);
-  animation: breathe 2.6s ease-in-out infinite;
+  box-shadow: 0 0 0 4px rgb(var(--rgb-good) / 0.14);
 }
 
 .status-orb.connecting,

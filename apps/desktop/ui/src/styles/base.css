@@ -16,7 +16,7 @@ body,
 body {
   margin: 0;
   color: var(--text-1);
-  background: var(--scene-bg) fixed;
+  background: var(--bg-0);
   font-family: var(--font-sans);
   font-size: 13px;
   line-height: 1.55;
@@ -81,16 +81,6 @@ pre {
   }
   50% {
     opacity: 0.35;
-  }
-}
-
-@keyframes breathe {
-  0%,
-  100% {
-    box-shadow: 0 0 0 4px rgb(var(--rgb-good) / 0.12), 0 0 14px rgb(var(--rgb-good) / 0.4);
-  }
-  50% {
-    box-shadow: 0 0 0 5px rgb(var(--rgb-good) / 0.16), 0 0 22px rgb(var(--rgb-good) / 0.6);
   }
 }
 

@@ -1,187 +1,148 @@
-/* ==========================================================================
-   planM · 设计 token（唯一真源）
-   --------------------------------------------------------------------------
-   分层：
-     1. 原始层   --rgb-*：颜色通道值，所有透明度都从这里派生（rgb(var(--rgb-accent) / 0.12)）。
-     2. 语义层   --bg-* / --text-* / --line* / 状态色与变体。
-     3. 节奏层   圆角 / 时长 / 缓动 / 阴影 / 层级。
-   主题：:root 为深色默认（防首帧闪烁），[data-theme='light'] 覆盖为浅色。
-   换主题只动这个文件 + utils/theme.ts；组件样式一律引用变量，禁止硬编码色值。
-   ========================================================================== */
-
+/* Shared surfaces, typography, and status colors for both themes. */
 :root,
 [data-theme='dark'] {
   color-scheme: dark;
 
-  /* —— 原始层：颜色通道 —— */
-  --rgb-accent: 119 169 255;
-  --rgb-good: 53 211 153;
-  --rgb-warn: 245 185 66;
-  --rgb-bad: 255 107 107;
-  --rgb-uncertain: 142 167 255;
-  --rgb-lost: 107 122 140;
-  /* wash：深色下做“提亮叠层”，浅色下翻转为“压暗叠层” */
+  --rgb-accent: 129 178 255;
+  --rgb-good: 76 211 159;
+  --rgb-warn: 245 188 95;
+  --rgb-bad: 253 129 129;
+  --rgb-uncertain: 160 176 255;
+  --rgb-lost: 151 164 182;
   --rgb-wash: 255 255 255;
 
-  /* —— 语义层：表面 —— */
-  --bg-0: #13182a;
-  --bg-1: #1c2237;
-  --bg-2: #242d46;
-  --bg-3: #303a55;
-  --bg-popover: #212941;
-  --line: #3b4561;
-  --line-soft: #303850;
-  --line-strong: #545f80;
+  --bg-0: #101722;
+  --bg-1: #182230;
+  --bg-2: #1e2b3c;
+  --bg-3: #28384b;
+  --bg-popover: #202e40;
+  --line: #344458;
+  --line-soft: #2b394c;
+  --line-strong: #50647d;
 
-  /* —— 语义层：文字 —— */
-  --text-1: #f4f6ff;
-  --text-2: #cbd2e8;
-  --text-3: #a6b1cb;
-  --text-disabled: #8590ad;
+  --text-1: #eef3fa;
+  --text-2: #c3cfde;
+  --text-3: #a0afc2;
+  --text-disabled: #76869a;
 
-  /* —— 语义层：主色与状态 —— */
   --accent: rgb(var(--rgb-accent));
-  --accent-hover: #a2c4ff;
-  --accent-active: #6398f4;
-  --on-accent: #071018;              /* 主色底上的文字/图标（深浅主题方向相反） */
-  --accent-strong: #b9d2ff;          /* 染色底上的高亮文字 */
+  --accent-hover: #a0c4ff;
+  --accent-active: #70a7f4;
+  --on-accent: #102038;
+  --accent-strong: #aaccff;
   --accent-soft: rgb(var(--rgb-accent) / 0.12);
-  --accent-line: rgb(var(--rgb-accent) / 0.3);
+  --accent-line: rgb(var(--rgb-accent) / 0.34);
   --good: rgb(var(--rgb-good));
-  --good-strong: #82e9c5;
-  --good-soft: rgb(var(--rgb-good) / 0.1);
+  --good-strong: #88e6be;
+  --good-soft: rgb(var(--rgb-good) / 0.11);
   --good-line: rgb(var(--rgb-good) / 0.28);
   --warn: rgb(var(--rgb-warn));
-  --warn-strong: #f2ca7a;
-  --warn-soft: rgb(var(--rgb-warn) / 0.1);
-  --warn-line: rgb(var(--rgb-warn) / 0.28);
+  --warn-strong: #ffd496;
+  --warn-soft: rgb(var(--rgb-warn) / 0.11);
+  --warn-line: rgb(var(--rgb-warn) / 0.3);
   --bad: rgb(var(--rgb-bad));
-  --bad-strong: #ff9d9d;
+  --bad-strong: #ffabab;
   --bad-soft: rgb(var(--rgb-bad) / 0.1);
   --bad-line: rgb(var(--rgb-bad) / 0.3);
   --uncertain: rgb(var(--rgb-uncertain));
   --lost: rgb(var(--rgb-lost));
 
-  /* —— 语义层：复合背景 —— */
-  --scene-bg:
-    radial-gradient(ellipse at 94% 11%, #443f73 0, transparent 55%),
-    radial-gradient(ellipse at 8% 18%, #294678 0, transparent 53%),
-    radial-gradient(ellipse at 72% 100%, #282c63 0, transparent 66%),
-    #111727;
-  --glass-edge: rgb(192 209 255 / 0.22);
-  --glass-glint: rgb(229 237 255 / 0.14);
-  --glass-shadow: 0 14px 34px rgb(4 8 25 / 0.24), inset 0 1px 0 var(--glass-glint);
-  --rail-bg: rgb(24 33 57 / 0.55);
-  --card-bg: linear-gradient(145deg, rgb(53 64 101 / 0.68), rgb(27 34 58 / 0.52));
-  --modal-bg: rgb(31 40 68 / 0.89);
-  --inset-bg: rgb(var(--rgb-wash) / 0.016);          /* 卡内再嵌一层的底 */
-  --row-hover-bg: rgb(var(--rgb-wash) / 0.035);
-  --glass-bg: rgb(34 45 73 / 0.66);
-  --tabs-bg: rgb(27 35 56 / 0.52);
-  --mask-bg: rgba(4, 7, 12, 0.66);
-  --scrim-bg: rgba(9, 12, 17, 0.86);
-  --code-bg: rgba(0, 0, 0, 0.3);
-  --scrollbar-thumb: #293748;
-  --scrollbar-thumb-hover: #3a4d63;
-  --grad-accent: linear-gradient(90deg, var(--accent), rgb(var(--rgb-accent) / 0.55));
+  --rail-bg: #121c2b;
+  --rail-text: #c9d4e4;
+  --rail-muted: #9aaec7;
+  --rail-line: #29394e;
+  --rail-hover: #1d2c40;
+  --rail-selected: #243d5f;
+  --rail-accent: #a9cbff;
+  --brand-bg: #2964c6;
+  --gateway-bg: #193253;
+  --gateway-border: #304c70;
+  --gateway-text: #f4f8ff;
+  --gateway-muted: #bbcee7;
+  --gateway-line: rgb(181 210 249 / 0.2);
+  --gateway-pattern: rgb(181 210 249 / 0.1);
+  --gateway-good: #94edc6;
+  --gateway-warn: #ffd394;
+  --gateway-bad: #ffb2b2;
 
-  /* —— 节奏层 —— */
-  --rail-text: var(--text-2);
-  --rail-muted: var(--text-3);
-  --rail-line: rgb(var(--rgb-wash) / 0.08);
-  --rail-selected: var(--accent-soft);
-  --rail-selected-line: var(--glass-edge);
-  --rail-accent: var(--accent-strong);
+  --card-bg: var(--bg-1);
+  --modal-bg: var(--bg-popover);
+  --inset-bg: rgb(var(--rgb-wash) / 0.025);
+  --row-hover-bg: rgb(var(--rgb-wash) / 0.046);
+  --mask-bg: rgb(4 7 12 / 0.66);
+  --scrim-bg: rgb(9 12 17 / 0.9);
+  --code-bg: rgb(0 0 0 / 0.28);
+  --scrollbar-thumb: #394b61;
+  --scrollbar-thumb-hover: #536a84;
+  --grad-accent: linear-gradient(90deg, var(--accent), rgb(var(--rgb-accent) / 0.62));
 
-  --radius-xs: 8px;
-  --radius-sm: 11px;
-  --radius-md: 15px;
-  --radius: 21px;                    /* 兼容旧名：默认卡片圆角 */
-  --radius-lg: 27px;
-  --titlebar-h: 58px;
-  --rail-w: 208px;
-  --rail-w-collapsed: 69px;
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius: 12px;
+  --radius-lg: 16px;
+  --titlebar-h: 62px;
+  --rail-w: 216px;
+  --rail-w-collapsed: 62px;
   --dur-1: 120ms;
   --dur-2: 180ms;
   --dur-3: 280ms;
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-swing: cubic-bezier(0.65, 0, 0.35, 1);
-  --shadow-3: 0 2px 8px rgba(0, 0, 0, 0.3);
-  --shadow-2: 0 6px 18px rgba(0, 0, 0, 0.35);
-  --shadow-1: 0 16px 48px rgba(0, 0, 0, 0.45);   /* 兼容旧名：弹窗 */
+  --shadow-3: 0 1px 2px rgb(0 0 0 / 0.16);
+  --shadow-2: 0 5px 16px rgb(0 0 0 / 0.26);
+  --shadow-1: 0 18px 48px rgb(0 0 0 / 0.42);
   --z-modal: 1000;
   --z-toast: 1200;
-  --focus-ring: 2px solid rgb(var(--rgb-accent) / 0.55);
+  --focus-ring: 2px solid var(--accent);
 
   --font-mono: ui-monospace, 'Cascadia Mono', 'SFMono-Regular', Consolas, monospace;
-  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --font-sans: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
 }
-
-/* ==========================================================================
-   浅色主题 —— 只覆盖语义层，原始层通道同步翻转
-   ========================================================================== */
 
 [data-theme='light'] {
   color-scheme: light;
 
-  --rgb-accent: 32 91 213;
-  --rgb-good: 11 125 88;             /* #0b7d58 */
-  --rgb-warn: 180 83 9;              /* #b45309 */
-  --rgb-bad: 220 38 38;              /* #dc2626 */
-  --rgb-uncertain: 79 99 210;        /* #4f63d2 */
-  --rgb-lost: 100 116 139;           /* #64748b */
-  --rgb-wash: 29 47 81;
+  --rgb-accent: 35 87 185;
+  --rgb-good: 14 112 75;
+  --rgb-warn: 147 74 14;
+  --rgb-bad: 178 47 56;
+  --rgb-uncertain: 72 87 173;
+  --rgb-lost: 92 107 126;
+  --rgb-wash: 26 45 72;
 
-  --bg-0: #eaeffc;
-  --bg-1: #ffffff;
-  --bg-2: #f1f4fc;
-  --bg-3: #e1e8f8;
-  --bg-popover: #ffffff;
-  --line: #cbd6ed;
-  --line-soft: #dce4f5;
-  --line-strong: #a8badb;
+  --bg-0: #f2f5f8;
+  --bg-1: #fff;
+  --bg-2: #f4f7fb;
+  --bg-3: #e8eef6;
+  --bg-popover: #fff;
+  --line: #d9e2ec;
+  --line-soft: #e6edf4;
+  --line-strong: #adbdcf;
 
-  --text-1: #172240;
-  --text-2: #394968;
-  --text-3: #4c5e7d;
-  --text-disabled: #7384a4;
+  --text-1: #162338;
+  --text-2: #37495f;
+  --text-3: #53667d;
+  --text-disabled: #748398;
 
-  --accent: rgb(var(--rgb-accent));
-  --accent-hover: #235ee2;
-  --accent-active: #1846b6;
-  --on-accent: #ffffff;
-  --accent-strong: #234fbb;
-  --good-strong: #0a6b4c;
-  --warn-strong: #8f4a08;
-  --bad-strong: #b91c1c;
+  --accent-hover: #1c479f;
+  --accent-active: #193d87;
+  --on-accent: #fff;
+  --accent-strong: #214f9e;
+  --accent-soft: rgb(var(--rgb-accent) / 0.08);
+  --accent-line: rgb(var(--rgb-accent) / 0.29);
+  --good-strong: #0d6546;
+  --warn-strong: #834009;
+  --bad-strong: #a02833;
 
-  --scene-bg:
-    radial-gradient(ellipse at 8% 18%, #bfd5fa 0, transparent 47%),
-    radial-gradient(ellipse at 93% 3%, #dcd3fb 0, transparent 54%),
-    radial-gradient(ellipse at 70% 86%, #d8dcf8 0, transparent 53%),
-    radial-gradient(ellipse at 38% 45%, #e0eafa 0, transparent 66%),
-    #edf3fd;
-  --glass-edge: rgb(255 255 255 / 0.78);
-  --glass-glint: rgb(255 255 255 / 0.88);
-  --glass-shadow: 0 10px 29px rgb(49 72 123 / 0.09), inset 0 1px 0 var(--glass-glint);
-  --rail-bg: rgb(250 252 255 / 0.56);
-  --card-bg: linear-gradient(145deg, rgb(255 255 255 / 0.79), rgb(249 251 255 / 0.51));
-  --modal-bg: rgb(249 251 255 / 0.9);
-  --inset-bg: rgb(var(--rgb-wash) / 0.035);
-  --row-hover-bg: rgb(var(--rgb-wash) / 0.05);
-  --glass-bg: rgb(249 251 255 / 0.58);
-  --tabs-bg: rgb(249 251 255 / 0.43);
-  --mask-bg: rgb(30 39 80 / 0.26);
-  --scrim-bg: rgba(255, 255, 255, 0.92);
+  --inset-bg: rgb(var(--rgb-wash) / 0.025);
+  --row-hover-bg: rgb(var(--rgb-wash) / 0.045);
+  --mask-bg: rgb(16 31 54 / 0.36);
+  --scrim-bg: rgb(255 255 255 / 0.94);
   --code-bg: rgb(var(--rgb-wash) / 0.06);
-  --scrollbar-thumb: #c6d2e0;
-  --scrollbar-thumb-hover: #a8b9cc;
-  --grad-accent: linear-gradient(90deg, var(--accent), rgb(var(--rgb-accent) / 0.5));
-
-  --shadow-3: 0 2px 8px rgba(23, 36, 55, 0.07);
-  --shadow-2: 0 6px 18px rgba(23, 36, 55, 0.1);
-  --shadow-1: 0 16px 48px rgba(23, 36, 55, 0.16);
-  --focus-ring: 2px solid rgb(var(--rgb-accent) / 0.45);
+  --scrollbar-thumb: #becbd9;
+  --scrollbar-thumb-hover: #9fb0c4;
+  --shadow-3: 0 1px 2px rgb(21 39 66 / 0.06);
+  --shadow-2: 0 5px 16px rgb(21 39 66 / 0.09);
+  --shadow-1: 0 18px 48px rgb(21 39 66 / 0.18);
 }
-
-

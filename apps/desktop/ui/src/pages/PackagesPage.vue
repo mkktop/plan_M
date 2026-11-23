@@ -249,7 +249,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="page">
-    <PageHeader title="设备包" subtitle="管理设备型号、通信协议和点位定义">
+    <PageHeader title="设备包" subtitle="导入或创建设备包，配置型号的通信协议、点位和默认页面">
       <n-button v-if="deviceSetup" size="small" @click="router.push('/devices')">返回设备接入</n-button>
       <n-button size="small" type="primary" @click="studioOpen = true">
         <template #icon><AppIcon name="plus" :size="15" /></template>
